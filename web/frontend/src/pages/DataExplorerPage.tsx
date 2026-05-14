@@ -238,7 +238,7 @@ function FetchActionCard({ trackTask }: { trackTask: (taskId: string) => void })
   const submit = async (params: FetchParams) => {
     if (params.force_refresh) {
       setConfirmParams({ ...params, dry_run: false });
-      return { task_id: "awaiting-confirmation" };
+      return null;
     }
     const result = await triggerFetch({ ...params, dry_run: false });
     trackTask(result.task_id);
@@ -365,7 +365,7 @@ function PurgeActionCard({ trackTask }: { trackTask: (taskId: string) => void })
 
   const submit = async (params: PurgeParams) => {
     setConfirmParams({ ...params, dry_run: false });
-    return { task_id: "awaiting-confirmation" };
+    return null;
   };
 
   const confirmSubmit = async () => {

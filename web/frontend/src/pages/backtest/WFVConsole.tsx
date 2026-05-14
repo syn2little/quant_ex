@@ -316,7 +316,7 @@ export function WFVConsole() {
         onDryRun={preview.run}
         onSubmit={async (params) => {
           setConfirmParams({ ...params, rank_metric: "information_ratio", dry_run: false });
-          return { task_id: "pending-confirmation" };
+          return null;
         }}
         renderFields={(form) => (
           <WFVFields

@@ -10,6 +10,8 @@ export type DryRunResult<TPreview = unknown> = {
   preview: TPreview | null;
 };
 
+export type ExecutionFormSubmitResult = { task_id: string } | null;
+
 export type ExecutionFormProps<TParams extends FieldValues> = {
   pageKey: "data" | "models" | "backtest" | "signals";
   actionKey: string;
@@ -17,7 +19,7 @@ export type ExecutionFormProps<TParams extends FieldValues> = {
   defaults: Partial<TParams>;
   dryRunDefault: boolean;
   onDryRun: (params: TParams) => Promise<DryRunResult>;
-  onSubmit: (params: TParams) => Promise<{ task_id: string }>;
+  onSubmit: (params: TParams) => Promise<ExecutionFormSubmitResult>;
   renderFields: (form: UseFormReturn<TParams>) => ReactNode;
   destructive?: boolean;
 };
@@ -36,9 +38,9 @@ export function ExecutionForm<TParams extends FieldValues>({
     defaultValues: defaults as DefaultValues<TParams>,
   });
 
-  const emitTaskCreated = (taskId: string) => {
-    if (taskId === "awaiting-confirmation" || taskId === "pending-confirmation") return;
-    window.dispatchEvent(new CustomEvent("console:task-created", { detail: { taskId } }));
+  const emitTaskCreated = (result: ExecutionFormSubmitResult) => {
+    if (result === null) return;
+    window.dispatchEvent(new CustomEvent("console:task-created", { detail: { taskId: result.task_id } }));
   };
 
   return (
@@ -49,11 +51,11 @@ export function ExecutionForm<TParams extends FieldValues>({
         const dryRun = (params as Record<string, unknown>).dry_run;
         if ((typeof dryRun === "boolean" ? dryRun : undefined) ?? dryRunDefault) {
           const result = await onDryRun(params);
-          emitTaskCreated(result.task_id);
+          emitTaskCreated(result);
           return;
         }
         const result = await onSubmit(params);
-        emitTaskCreated(result.task_id);
+        emitTaskCreated(result);
       })}
     >
       {renderFields(form)}

@@ -44,6 +44,21 @@ def test_console_dialog_and_drawer_translate_labels_and_show_details():
     assert 't("console.tasks.events")' in drawer
 
 
+def test_execution_form_uses_typed_null_submit_skip_instead_of_string_sentinels():
+    execution_form = (FRONTEND_SRC / "components" / "console" / "ExecutionForm.tsx").read_text(encoding="utf-8")
+    console_index = (FRONTEND_SRC / "components" / "console" / "index.ts").read_text(encoding="utf-8")
+
+    assert "ExecutionFormSubmitResult" in execution_form
+    assert "ExecutionFormSubmitResult" in console_index
+    assert "Promise<ExecutionFormSubmitResult>" in execution_form
+    assert "result === null" in execution_form
+
+    for source_path in FRONTEND_SRC.rglob("*.tsx"):
+        source = source_path.read_text(encoding="utf-8")
+        assert "awaiting-confirmation" not in source
+        assert "pending-confirmation" not in source
+
+
 def test_data_fetch_returns_unified_envelope_for_dry_run():
     client = TestClient(create_app())
 

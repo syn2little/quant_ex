@@ -329,7 +329,7 @@ export function GridConsole() {
         onDryRun={preview.run}
         onSubmit={async (params) => {
           setConfirmParams({ ...params, dry_run: false });
-          return { task_id: "pending-confirmation" };
+          return null;
         }}
         renderFields={(form) => (
           <GridFields
