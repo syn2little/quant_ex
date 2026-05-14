@@ -212,7 +212,7 @@ def _train_model(req: TrainRequest) -> dict:
         qlib_native=req.qlib_native,
         **kwargs,
     )
-    return {"recorder_id": recorder_id, "result_paths": []}
+    return {"recorder_id": recorder_id, "result_paths": trainer.last_result_paths}
 
 
 @router.post("/train")

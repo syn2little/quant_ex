@@ -23,6 +23,7 @@ def _combo_worker_parallel(
     end_time: Optional[str],
     universe_filter,
     seed: int,
+    backtest_kwargs: Optional[dict] = None,
 ) -> dict:
     """Top-level worker for parallel combo execution (single fixed seed).
 
@@ -50,6 +51,7 @@ def _combo_worker_parallel(
             end_time=end_time,
             universe_filter=universe_filter,
             seed=seed,
+            **(backtest_kwargs or {}),
         )
         return _compute_metrics(report)
     except Exception as e:
@@ -58,7 +60,7 @@ def _combo_worker_parallel(
 
 def _seed_worker(engine_config: dict, pred: pd.Series, params: dict,
                  start_time: Optional[str], end_time: Optional[str],
-                 seed: int, result_queue) -> None:
+                 seed: int, result_queue, backtest_kwargs: Optional[dict] = None) -> None:
     """Top-level worker executed in a fresh subprocess (spawn).
 
     PYTHONHASHSEED is already set in the environment by the parent process
@@ -84,6 +86,7 @@ def _seed_worker(engine_config: dict, pred: pd.Series, params: dict,
             start_time=start_time,
             end_time=end_time,
             seed=seed,
+            **(backtest_kwargs or {}),
         )
         result_queue.put(_compute_metrics(report))
     except Exception as e:
@@ -126,6 +129,11 @@ class GridSearchBacktest:
         universe_filter=None,
         multi_seed: bool = False,
         n_jobs: int = -1,
+        open_cost: Optional[float] = None,
+        close_cost: Optional[float] = None,
+        min_cost: Optional[float] = None,
+        deal_price: Optional[str] = None,
+        benchmark: Optional[str] = None,
     ) -> pd.DataFrame:
         """
         Run all parameter combinations.
@@ -142,6 +150,17 @@ class GridSearchBacktest:
             DataFrame sorted by configured ranking metric descending.
         """
         grid = param_grid or self.DEFAULT_GRID
+        backtest_kwargs = {
+            key: value
+            for key, value in {
+                "open_cost": open_cost,
+                "close_cost": close_cost,
+                "min_cost": min_cost,
+                "deal_price": deal_price,
+                "benchmark": benchmark,
+            }.items()
+            if value is not None
+        }
         keys = list(grid.keys())
         combos = list(product(*[grid[k] for k in keys]))
         seeds = self.MULTI_SEEDS if multi_seed else [42]
@@ -154,7 +173,7 @@ class GridSearchBacktest:
         # ── parallel single-seed path ──────────────────────────────────────
         if not multi_seed and n_jobs != 1 and len(combos) > 1:
             return self._run_parallel(
-                combos, keys, start_time, end_time, universe_filter, n_jobs
+                combos, keys, start_time, end_time, universe_filter, n_jobs, backtest_kwargs
             )
 
         # ── serial / multi-seed path ───────────────────────────────────────
@@ -167,7 +186,7 @@ class GridSearchBacktest:
                 try:
                     if multi_seed:
                         metrics = self._run_seed_subprocess(
-                            params, start_time, end_time, seed
+                            params, start_time, end_time, seed, backtest_kwargs
                         )
                     else:
                         report, _ = self.engine.run(
@@ -177,6 +196,7 @@ class GridSearchBacktest:
                             end_time=end_time,
                             universe_filter=universe_filter,
                             seed=seed,
+                            **backtest_kwargs,
                         )
                         metrics = compute_metrics(report)
                     seed_metrics.append(metrics)
@@ -217,6 +237,7 @@ class GridSearchBacktest:
         end_time: Optional[str],
         universe_filter,
         n_jobs: int,
+        backtest_kwargs: Optional[dict] = None,
     ) -> pd.DataFrame:
         """Run combos in parallel using spawned subprocesses (PYTHONHASHSEED=42)."""
         max_workers = os.cpu_count() if n_jobs == -1 else max(1, n_jobs)
@@ -237,6 +258,7 @@ class GridSearchBacktest:
                     end_time,
                     universe_filter,
                     42,
+                    backtest_kwargs,
                 ): combo
                 for combo in combos
             }
@@ -283,6 +305,7 @@ class GridSearchBacktest:
         start_time: Optional[str],
         end_time: Optional[str],
         seed: int,
+        backtest_kwargs: Optional[dict] = None,
     ) -> dict:
         """Run one backtest in a fresh subprocess with PYTHONHASHSEED=seed.
 
@@ -297,7 +320,7 @@ class GridSearchBacktest:
         q = ctx.Queue()
         p = ctx.Process(
             target=_seed_worker,
-            args=(self.config, self.pred, params, start_time, end_time, seed, q),
+            args=(self.config, self.pred, params, start_time, end_time, seed, q, backtest_kwargs),
         )
         p.start()
         p.join()

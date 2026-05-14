@@ -2,6 +2,9 @@ import copy
 import logging
 import subprocess
 import sys
+import time
+from datetime import date
+from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
@@ -20,6 +23,42 @@ def _safe_path(base_dir, filename: str):
     if ".." in filename or filename.startswith("/"):
         raise HTTPException(status_code=403, detail="Invalid filename")
     return base_dir / filename
+
+
+def _resolve_project_path(path: str | Path) -> Path:
+    resolved = Path(path).expanduser()
+    if not resolved.is_absolute():
+        resolved = PROJECT_ROOT / resolved
+    return resolved
+
+
+def _signal_output_path(config_path: Optional[str]) -> Path:
+    from quant_ex.utils.config import load_config
+
+    config = load_config(config_path) if config_path else get_config()
+    signal_dir = _resolve_project_path(config.get("paths", {}).get("signal_dir", "./signals"))
+    return signal_dir / f"signal_{date.today().isoformat()}.txt"
+
+
+def _rebalance_cache_candidates(req: "RebalanceRequest") -> list[Path]:
+    from quant_ex.utils.config import load_config
+
+    config = load_config(req.config) if req.config else get_config()
+    daily_cfg = config.get("daily_rebalance", {})
+    cache_dir = _resolve_project_path(daily_cfg.get("cache_dir", "signals/daily_rebalance_cache"))
+    trade_date = date.today().isoformat()
+    return [cache_dir / f"rebalance_{trade_date}.json", cache_dir / "latest.json"]
+
+
+def _fresh_existing_paths(paths: list[Path], started_at: float) -> list[str]:
+    result_paths = []
+    for path in paths:
+        try:
+            if path.exists() and path.stat().st_mtime >= started_at:
+                result_paths.append(str(path))
+        except OSError:
+            continue
+    return result_paths
 
 
 @router.get("/regime")
@@ -87,14 +126,16 @@ async def generate_signal(req: GenerateSignalRequest):
                 sym, qty = pair.strip().split(":")
                 positions[sym] = float(qty)
 
-        daily_main(
+        signal_path = daily_main(
             config_path=req.config_override or req.config,
             model_path=req.model_path,
             account=req.account,
             current_positions=positions if positions else None,
             dry_run=req.dry_run,
         )
-        return {"status": "completed", "result_paths": []}
+        if signal_path is None:
+            signal_path = _signal_output_path(req.config_override or req.config)
+        return {"status": "completed", "result_paths": [str(signal_path)]}
 
     task_id = await tm.start_sync_task(
         "signal_generate",
@@ -206,10 +247,16 @@ async def run_rebalance(req: RebalanceRequest):
 
     def _run():
         cmd = _build_rebalance_cmd(req)
+        candidates = _rebalance_cache_candidates(req)
+        started_at = time.time()
         result = subprocess.run(cmd, capture_output=True, text=True, cwd=str(PROJECT_ROOT), timeout=600)
         if result.returncode != 0:
             raise RuntimeError(f"Rebalance failed (exit {result.returncode}): {result.stderr[-500:]}")
-        return {"stdout": result.stdout[-2000:], "returncode": result.returncode, "result_paths": []}
+        return {
+            "stdout": result.stdout[-2000:],
+            "returncode": result.returncode,
+            "result_paths": _fresh_existing_paths(candidates, started_at),
+        }
 
     task_id = await tm.start_sync_task(
         "rebalance",

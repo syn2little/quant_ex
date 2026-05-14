@@ -347,7 +347,19 @@
       "taskId": "任务 ID",
       "action": "动作",
       "status": "状态",
-      "createdAt": "创建时间"
+      "createdAt": "创建时间",
+      "statusFilter": "状态筛选",
+      "actionFilter": "动作筛选",
+      "allStatuses": "全部状态",
+      "allActions": "全部动作",
+      "outputs": "产物",
+      "copyTaskId": "复制任务 ID",
+      "copyPath": "复制产物路径",
+      "failureDetails": "失败详情",
+      "snapshotStatus": "当前状态",
+      "snapshotCreated": "创建时间",
+      "snapshotOutputs": "产物",
+      "snapshotError": "错误"
     },
     "tabs": {
       "overview": "概览",

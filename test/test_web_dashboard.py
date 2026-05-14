@@ -159,6 +159,11 @@ def test_grid_command_includes_advanced_web_params():
         n_iters=5,
         grid_workers=4,
         output_csv="backtest_results/demo.csv",
+        benchmark="SH000905",
+        deal_price="open",
+        open_cost=0.0007,
+        close_cost=0.0017,
+        min_cost=3.5,
         slippage_sensitivity=True,
         slippage_multipliers=[0.0, 1.0, 2.0],
         markets=["csi300", "csi1000"],
@@ -178,6 +183,11 @@ def test_grid_command_includes_advanced_web_params():
     assert cmd[cmd.index("--n-iters") + 1] == "5"
     assert cmd[cmd.index("--grid-workers") + 1] == "4"
     assert cmd[cmd.index("--output-csv") + 1] == "backtest_results/demo.csv"
+    assert cmd[cmd.index("--benchmark") + 1] == "SH000905"
+    assert cmd[cmd.index("--deal-price") + 1] == "open"
+    assert cmd[cmd.index("--open-cost") + 1] == "0.0007"
+    assert cmd[cmd.index("--close-cost") + 1] == "0.0017"
+    assert cmd[cmd.index("--min-cost") + 1] == "3.5"
     assert cmd[cmd.index("--slippage-multipliers") + 1] == "0.0,1.0,2.0"
     assert cmd[cmd.index("--markets") + 1] == "csi300,csi1000"
 

@@ -347,7 +347,19 @@
       "taskId": "Task ID",
       "action": "Action",
       "status": "Status",
-      "createdAt": "Created"
+      "createdAt": "Created",
+      "statusFilter": "Status filter",
+      "actionFilter": "Action filter",
+      "allStatuses": "All statuses",
+      "allActions": "All actions",
+      "outputs": "Outputs",
+      "copyTaskId": "Copy task ID",
+      "copyPath": "Copy output path",
+      "failureDetails": "Failure details",
+      "snapshotStatus": "Current status",
+      "snapshotCreated": "Created",
+      "snapshotOutputs": "Outputs",
+      "snapshotError": "Error"
     },
     "tabs": {
       "overview": "Overview",

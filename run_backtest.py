@@ -92,6 +92,11 @@ def main(
     explore_markets: bool = False,
     grid_workers: int = -1,
     output_csv: str = None,
+    benchmark: str = None,
+    deal_price: str = None,
+    open_cost: float = None,
+    close_cost: float = None,
+    min_cost: float = None,
     slippage_sensitivity: bool = False,
     slippage_multipliers: list = None,
 ):
@@ -213,6 +218,11 @@ def main(
                 end_time=end,
                 multi_seed=multi_seed,
                 n_jobs=grid_workers,
+                benchmark=benchmark,
+                deal_price=deal_price,
+                open_cost=open_cost,
+                close_cost=close_cost,
+                min_cost=min_cost,
             )
             diagnostics = _signal_diagnostics_for_market(
                 data_loader=data_loader,
@@ -523,6 +533,37 @@ if __name__ == "__main__":
              "walk-forward 模式下用此参数隔离每折结果，避免并行竞争。",
     )
     parser.add_argument(
+        "--benchmark",
+        type=str,
+        default=None,
+        help="回测基准代码，例如 SH000300 或 SH000905（默认读取配置）。",
+    )
+    parser.add_argument(
+        "--deal-price",
+        type=str,
+        default=None,
+        choices=["open", "close"],
+        help="成交价格字段（默认读取配置，通常为 close）。",
+    )
+    parser.add_argument(
+        "--open-cost",
+        type=float,
+        default=None,
+        help="买入交易成本，覆盖配置 backtest.open_cost。",
+    )
+    parser.add_argument(
+        "--close-cost",
+        type=float,
+        default=None,
+        help="卖出交易成本，覆盖配置 backtest.close_cost。",
+    )
+    parser.add_argument(
+        "--min-cost",
+        type=float,
+        default=None,
+        help="最低交易费用，覆盖配置 backtest.min_cost。",
+    )
+    parser.add_argument(
         "--slippage-sensitivity",
         action="store_true",
         help="滑点敏感性分析：用最优参数在不同交易成本倍数下测试 Sharpe 变化（CAP-13）",
@@ -551,6 +592,11 @@ if __name__ == "__main__":
         explore_markets=args.explore_markets,
         grid_workers=args.grid_workers,
         output_csv=args.output_csv,
+        benchmark=args.benchmark,
+        deal_price=args.deal_price,
+        open_cost=args.open_cost,
+        close_cost=args.close_cost,
+        min_cost=args.min_cost,
         slippage_sensitivity=args.slippage_sensitivity,
         slippage_multipliers=(
             [float(x) for x in args.slippage_multipliers.split(",")]

@@ -1,8 +1,8 @@
 """E2E coverage for dashboard console task wiring.
 
-The test expects the built FastAPI dashboard to be running. Start it with:
-
-    ./.venv/bin/python -m uvicorn web.api.app:app --host 127.0.0.1 --port 8000
+When WEB_BASE_URL is set, the test uses that already-running dashboard.
+Otherwise it self-starts FastAPI on a free local port; the frontend dist must
+already be built.
 
 The browser test uses Chrome DevTools Protocol directly so the repo does not
 need a Playwright dependency.
@@ -14,6 +14,7 @@ import json
 import shutil
 import socket
 import subprocess
+import sys
 import tempfile
 import time
 from itertools import count
@@ -29,20 +30,82 @@ except Exception:  # pragma: no cover - environment-dependent skip path
     websocket = None
 
 
-SERVER_URL = os.environ.get("WEB_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+SERVER_URL_OVERRIDE = os.environ.get("WEB_BASE_URL")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
 
 @pytest.fixture(scope="module")
-def server_url() -> str:
-    for _ in range(30):
+def server_url(tmp_path_factory) -> str:
+    if SERVER_URL_OVERRIDE:
+        server_url = SERVER_URL_OVERRIDE.rstrip("/")
+        for _ in range(30):
+            try:
+                response = requests.get(f"{server_url}/api/system/health", timeout=1)
+                if response.status_code == 200:
+                    yield server_url
+                    return
+            except requests.RequestException:
+                time.sleep(0.5)
+        pytest.skip(f"Web server not running at {server_url}")
+
+    dist_index = PROJECT_ROOT / "web" / "frontend" / "dist" / "index.html"
+    if not dist_index.exists():
+        pytest.skip("Frontend dist missing; run cd web/frontend && npm run build")
+
+    port = _free_port()
+    server_url = f"http://127.0.0.1:{port}"
+    log_dir = tmp_path_factory.mktemp("web-e2e-server")
+    stdout_path = log_dir / "uvicorn.stdout.log"
+    stderr_path = log_dir / "uvicorn.stderr.log"
+    python = PROJECT_ROOT / ".venv" / "bin" / "python"
+    if not python.exists():
+        python = Path(sys.executable)
+    env = os.environ.copy()
+    pythonpath = os.pathsep.join([str(PROJECT_ROOT), str(PROJECT_ROOT.parent)])
+    env["PYTHONPATH"] = (
+        pythonpath if not env.get("PYTHONPATH") else pythonpath + os.pathsep + env["PYTHONPATH"]
+    )
+    with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open("w", encoding="utf-8") as stderr:
+        proc = subprocess.Popen(
+            [
+                str(python),
+                "-m",
+                "uvicorn",
+                "web.api.app:app",
+                "--host",
+                "127.0.0.1",
+                "--port",
+                str(port),
+            ],
+            cwd=str(PROJECT_ROOT),
+            env=env,
+            stdout=stdout,
+            stderr=stderr,
+        )
+    try:
+        for _ in range(60):
+            if proc.poll() is not None:
+                break
+            try:
+                response = requests.get(f"{server_url}/api/system/health", timeout=1)
+                if response.status_code == 200:
+                    yield server_url
+                    return
+            except requests.RequestException:
+                time.sleep(0.25)
+        stderr_tail = stderr_path.read_text(encoding="utf-8", errors="replace")[-2000:]
+        stdout_tail = stdout_path.read_text(encoding="utf-8", errors="replace")[-2000:]
+        pytest.skip(
+            "Self-started web server did not become healthy. "
+            f"stdout tail: {stdout_tail} stderr tail: {stderr_tail}"
+        )
+    finally:
+        proc.terminate()
         try:
-            response = requests.get(f"{SERVER_URL}/api/system/health", timeout=1)
-            if response.status_code == 200:
-                return SERVER_URL
-        except requests.RequestException:
-            time.sleep(0.5)
-    pytest.skip(f"Web server not running at {SERVER_URL}")
+            proc.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+
 
 
 @pytest.fixture(scope="module")

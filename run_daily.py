@@ -242,6 +242,8 @@ def main(
     else:
         logger.info("dry-run 模式，跳过通知推送")
 
+    return out
+
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="每日量化选股信号生成")

@@ -11,6 +11,7 @@ import subprocess
 import sys
 import time
 import types
+from datetime import date
 from pathlib import Path
 
 import pytest
@@ -139,7 +140,8 @@ def test_models_train_dry_run_and_validation(client):
 
 
 def test_models_train_real_run_mocked(client, monkeypatch):
-    monkeypatch.setattr(models_router, "_train_model", lambda _req: {"ok": True, "result_paths": []})
+    model_path = "models/lgbm_ci_20260514_120000.pkl"
+    monkeypatch.setattr(models_router, "_train_model", lambda _req: {"ok": True, "result_paths": [model_path]})
     response = client.post(
         "/api/models/train",
         json={"model_type": "lgbm", "tag": "ci", "dry_run": False},
@@ -150,7 +152,8 @@ def test_models_train_real_run_mocked(client, monkeypatch):
     assert body["dry_run"] is False
     task = _wait_for_terminal_task(client, body["task_id"])
     assert task["status"] == "done"
-    assert task["result"] == {"ok": True, "result_paths": []}
+    assert task["result"] == {"ok": True, "result_paths": [model_path]}
+    assert task["result_paths"] == [model_path]
     assert task["page_key"] == "models"
     assert task["action_key"] == "models.train"
 
@@ -190,6 +193,12 @@ def test_models_delete_dry_run_real_run_and_validation(client, monkeypatch, tmp_
 
 
 def test_backtest_grid_dry_run_real_run_and_validation(client, monkeypatch):
+    captured = {}
+
+    def _fake_grid_run(argv, **_kwargs):
+        captured["argv"] = argv
+        return subprocess.CompletedProcess(argv, 0, "", "")
+
     payload = {
         "model_path": "models/dummy.pkl",
         "topk_list": [5],
@@ -202,14 +211,30 @@ def test_backtest_grid_dry_run_real_run_and_validation(client, monkeypatch):
     assert dry_body["preview"]["candidate_count"] == 1
     _assert_task_metadata(client, dry_body, "backtest", "backtest.grid")
 
-    monkeypatch.setattr(subprocess, "run", lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""))
-    real = client.post("/api/backtest/grid", json={**payload, "dry_run": False})
+    monkeypatch.setattr(subprocess, "run", _fake_grid_run)
+    real = client.post(
+        "/api/backtest/grid",
+        json={
+            **payload,
+            "benchmark": "SH000905",
+            "deal_price": "open",
+            "open_cost": 0.0007,
+            "close_cost": 0.0017,
+            "min_cost": 3.5,
+            "dry_run": False,
+        },
+    )
     assert real.status_code == 200
     task = _wait_for_terminal_task(client, real.json()["task_id"])
     assert task["status"] == "done"
     assert task["action_key"] == "backtest.grid"
     assert task["result_paths"]
     assert task["result_paths"][0].endswith(".csv")
+    assert captured["argv"][captured["argv"].index("--benchmark") + 1] == "SH000905"
+    assert captured["argv"][captured["argv"].index("--deal-price") + 1] == "open"
+    assert captured["argv"][captured["argv"].index("--open-cost") + 1] == "0.0007"
+    assert captured["argv"][captured["argv"].index("--close-cost") + 1] == "0.0017"
+    assert captured["argv"][captured["argv"].index("--min-cost") + 1] == "3.5"
 
     invalid = client.post("/api/backtest/grid", json={"model_path": ""})
     assert invalid.status_code == 422
@@ -222,7 +247,7 @@ def test_backtest_grid_dry_run_real_run_and_validation(client, monkeypatch):
 
     unsupported_real = client.post(
         "/api/backtest/grid",
-        json={**payload, "benchmark": "SH000905", "dry_run": False},
+        json={**payload, "slippage": 0.01, "dry_run": False},
     )
     assert unsupported_real.status_code == 422
 
@@ -291,7 +316,7 @@ def test_backtest_compare_dry_run_real_run_and_validation(client, monkeypatch):
 # ---------- Signals ----------
 
 
-def test_signals_generate_dry_run_real_run_and_validation(client, monkeypatch):
+def test_signals_generate_dry_run_real_run_and_validation(client, monkeypatch, tmp_path):
     dry = client.post("/api/signals/generate", json={"model_path": "models/dummy.pkl", "dry_run": True})
     assert dry.status_code == 200
     dry_body = dry.json()
@@ -299,27 +324,41 @@ def test_signals_generate_dry_run_real_run_and_validation(client, monkeypatch):
     _assert_task_metadata(client, dry_body, "signals", "signals.generate")
 
     run_daily = types.ModuleType("quant_ex.run_daily")
-    run_daily.main = lambda **_kwargs: None
+    signal_path = tmp_path / f"signal_{date.today().isoformat()}.txt"
+    run_daily.main = lambda **_kwargs: signal_path
     monkeypatch.setitem(sys.modules, "quant_ex.run_daily", run_daily)
     real = client.post("/api/signals/generate", json={"model_path": "models/dummy.pkl", "dry_run": False})
     assert real.status_code == 200
     task = _wait_for_terminal_task(client, real.json()["task_id"])
     assert task["status"] == "done"
     assert task["action_key"] == "signals.generate"
+    assert task["result_paths"] == [str(signal_path)]
 
     invalid = client.post("/api/signals/generate", json={"model_path": ""})
     assert invalid.status_code == 422
 
 
-def test_signals_rebalance_dry_run_real_run_and_validation(client, monkeypatch):
-    payload = {"config": "config/daily_csi1000.yaml", "skip_update": True}
+def test_signals_rebalance_dry_run_real_run_and_validation(client, monkeypatch, tmp_path):
+    payload = {"skip_update": True}
+    cache_dir = tmp_path / "rebalance_cache"
+    monkeypatch.setattr(
+        "web.api.routers.signals.get_config",
+        lambda: {"daily_rebalance": {"cache_dir": str(cache_dir)}},
+    )
     dry = client.post("/api/signals/rebalance", json={**payload, "dry_run": True})
     assert dry.status_code == 200
     dry_body = dry.json()
     assert "diff" in dry_body["preview"]
     _assert_task_metadata(client, dry_body, "signals", "signals.rebalance")
 
-    monkeypatch.setattr(subprocess, "run", lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "ok", ""))
+    def _fake_rebalance_run(*_args, **_kwargs):
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        today = date.today().isoformat()
+        (cache_dir / f"rebalance_{today}.json").write_text("{}", encoding="utf-8")
+        (cache_dir / "latest.json").write_text("{}", encoding="utf-8")
+        return subprocess.CompletedProcess([], 0, "ok", "")
+
+    monkeypatch.setattr(subprocess, "run", _fake_rebalance_run)
     real = client.post(
         "/api/signals/rebalance",
         json={**payload, "dry_run": False, "confirm_send": True},
@@ -328,6 +367,10 @@ def test_signals_rebalance_dry_run_real_run_and_validation(client, monkeypatch):
     task = _wait_for_terminal_task(client, real.json()["task_id"])
     assert task["status"] == "done"
     assert task["action_key"] == "signals.rebalance"
+    assert {Path(path).name for path in task["result_paths"]} == {
+        f"rebalance_{date.today().isoformat()}.json",
+        "latest.json",
+    }
 
     invalid = client.post("/api/signals/rebalance", json={**payload, "dry_run": False, "confirm_send": False})
     assert invalid.status_code == 400

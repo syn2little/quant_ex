@@ -114,6 +114,16 @@ def _build_grid_cmd(req: GridSearchRequest) -> list[str]:
         argv.extend(["--grid-workers", str(req.grid_workers)])
     if req.output_csv:
         argv.extend(["--output-csv", req.output_csv])
+    if req.benchmark:
+        argv.extend(["--benchmark", req.benchmark])
+    if req.deal_price != "close":
+        argv.extend(["--deal-price", req.deal_price])
+    if req.open_cost != 0.0005:
+        argv.extend(["--open-cost", str(req.open_cost)])
+    if req.close_cost != 0.0015:
+        argv.extend(["--close-cost", str(req.close_cost)])
+    if req.min_cost != 5.0:
+        argv.extend(["--min-cost", str(req.min_cost)])
     if req.slippage_sensitivity:
         argv.append("--slippage-sensitivity")
     if req.slippage_multipliers:
@@ -127,16 +137,6 @@ def _build_grid_cmd(req: GridSearchRequest) -> list[str]:
 
 def _validate_grid_real_run(req: GridSearchRequest) -> None:
     unsupported = []
-    if req.benchmark is not None:
-        unsupported.append("benchmark")
-    if req.deal_price != "close":
-        unsupported.append("deal_price")
-    if req.open_cost != 0.0005:
-        unsupported.append("open_cost")
-    if req.close_cost != 0.0015:
-        unsupported.append("close_cost")
-    if req.min_cost != 5.0:
-        unsupported.append("min_cost")
     if req.slippage != 0.0:
         unsupported.append("slippage")
     if unsupported:

@@ -65,6 +65,7 @@ class ModelTrainer:
         self.sector_provider = sector_provider
         self.model_dir = Path(config.get("paths", {}).get("model_dir", "./models"))
         self.model_dir.mkdir(parents=True, exist_ok=True)
+        self.last_result_paths: list[str] = []
 
     # ── public API ────────────────────────────────────────────────────────────
 
@@ -96,6 +97,7 @@ class ModelTrainer:
         -------
         (model, dataset, recorder_id_or_None)
         """
+        self.last_result_paths = []
         exp_name = experiment_name or self.config.get("experiment", {}).get("name", "quant_ex_exp")
         training_cfg = self.config.get("training", {})
         today = datetime.now().strftime("%Y-%m-%d")
@@ -225,13 +227,15 @@ class ModelTrainer:
                 "features": self.config.get("model", {}).get("features", {}),
             },
         }
-        (self.model_dir / f"{stem}_meta.json").write_text(
+        meta_path = self.model_dir / f"{stem}_meta.json"
+        meta_path.write_text(
             _json.dumps(meta, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
         logger.info(f"Metadata saved → {stem}_meta.json")
 
         # Persist feature importance for trend analysis
+        result_paths = [path, meta_path]
         try:
             imp_df = model.feature_importance(top_n=50)
             if not imp_df.empty:
@@ -245,9 +249,11 @@ class ModelTrainer:
                     encoding="utf-8",
                 )
                 logger.info(f"Feature importance saved → {imp_path.name}")
+                result_paths.append(imp_path)
         except Exception as exc:
             logger.debug(f"Feature importance export skipped: {exc}")
 
+        self.last_result_paths = [str(p) for p in result_paths]
         return model, dataset, None
 
     def _model_kwargs(
