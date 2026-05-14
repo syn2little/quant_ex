@@ -4,6 +4,7 @@ import {
   ConfirmDialog,
   ConsolePageLayout,
   DryRunPreview,
+  ExecutionForm,
   TaskChip,
 } from "../components/console";
 import { Card } from "../components/ui/Card";
@@ -23,7 +24,6 @@ import {
   triggerRebalance,
 } from "../api/signals";
 import type { RegimeInfo, SignalFile } from "../api/signals";
-import type { TaskTrigger } from "../api/tasks";
 import type { TaskState } from "../api/types";
 import {
   GenerateSchema,
@@ -37,6 +37,7 @@ import type {
   RebalanceParams,
 } from "../schemas/signals";
 import { useTaskTracking } from "../hooks/useTaskTracking";
+import { useDryRunPreview } from "../hooks/useDryRunPreview";
 
 type ModelInfo = {
   filename: string;
@@ -134,45 +135,6 @@ function Toggle({
   );
 }
 
-function ActionButton({
-  children,
-  disabled,
-  onClick,
-  danger,
-  testId,
-}: {
-  children: string;
-  disabled?: boolean;
-  onClick: () => void;
-  danger?: boolean;
-  testId?: string;
-}) {
-  return (
-    <button
-      type="button"
-      data-testid={testId}
-      onClick={onClick}
-      disabled={disabled}
-      className={`rounded-sm border px-3 py-1.5 text-xs font-mono transition-colors disabled:opacity-30 ${
-        danger
-          ? "border-terminal-red text-terminal-red hover:bg-terminal-red-glow"
-          : "border-terminal-green text-terminal-green hover:bg-terminal-green-glow"
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
-function PreviewBlock({ result }: { result: TaskTrigger<Record<string, unknown>> | null }) {
-  return (
-    <DryRunPreview
-      preview={result?.preview ?? null}
-      renderPreview={(preview) => <PreviewDetails preview={preview as Record<string, unknown>} />}
-    />
-  );
-}
-
 function PreviewDetails({ preview }: { preview: Record<string, unknown> }) {
   const diff = preview.diff as Record<string, unknown> | undefined;
   const notifyTemplate = preview.notify_template as Record<string, unknown> | undefined;
@@ -263,59 +225,111 @@ function ExecuteTab() {
 function GenerateAction() {
   const { t } = useTranslation();
   const models = useModels();
-  const [modelPath, setModelPath] = useState("");
   const [configOverride, setConfigOverride] = useState("");
-  const [dryRun, setDryRun] = useState(true);
-  const [result, setResult] = useState<TaskTrigger<Record<string, unknown>> | null>(null);
+  const preview = useDryRunPreview<GenerateParams, Record<string, unknown>>(triggerGenerate);
   const [error, setError] = useState<string | null>(null);
   const { trackTask } = useTaskTracking({ pageKey: "signals", taskTypeFilter: TASK_TYPES });
-
-  useEffect(() => {
-    if (!modelPath && models.length > 0) setModelPath(models[0].filename);
-  }, [modelPath, models]);
 
   const modelOptions = models.map((model) => ({
     value: model.filename,
     label: `${model.filename} (${model.size_mb} MB)`,
   }));
 
-  const submit = async () => {
-    setError(null);
-    const params: GenerateParams = GenerateSchema.parse({
-      model_path: modelPath,
+  const buildParams = (params: GenerateParams, dryRun: boolean): GenerateParams =>
+    GenerateSchema.parse({
+      ...params,
       config_override: configOverride.trim() || null,
       dry_run: dryRun,
     });
-    const response = await triggerGenerate(params);
-    setResult(response);
-    trackTask(response.task_id);
+
+  const dryRun = async (params: GenerateParams) => {
+    setError(null);
+    try {
+      const response = await preview.run(buildParams(params, true));
+      trackTask(response.task_id);
+      return response;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  };
+
+  const submit = async (params: GenerateParams) => {
+    setError(null);
+    try {
+      const response = await triggerGenerate(buildParams(params, false));
+      trackTask(response.task_id);
+      return response;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
   };
 
   return (
     <Card title={t("console.signals.generate.title")} accent="green">
       <div className="space-y-4">
-        <div>
-          <FieldLabel>{t("console.signals.fields.modelPath")}</FieldLabel>
-          <Select options={modelOptions} value={modelPath} onChange={setModelPath} searchable />
-        </div>
-        <div>
-          <FieldLabel>{t("console.signals.fields.configOverride")}</FieldLabel>
-          <TextInput
-            value={configOverride}
-            onChange={setConfigOverride}
-            placeholder="config/daily_csi1000.yaml"
-          />
-        </div>
-        <Toggle checked={dryRun} onChange={setDryRun} label={t("console.signals.fields.dryRun")} />
-        <ActionButton
-          onClick={() => submit().catch((err) => setError(String(err)))}
-          disabled={!modelPath}
-          testId="signals-generate-submit"
-        >
-          {dryRun ? t("console.signals.actions.preview") : t("console.signals.actions.submit")}
-        </ActionButton>
+        <ExecutionForm<GenerateParams>
+          pageKey="signals"
+          actionKey="signals.generate"
+          schema={GenerateSchema}
+          defaults={{
+            model_path: models[0]?.filename ?? "",
+            config_override: null,
+            dry_run: true,
+          }}
+          dryRunDefault
+          onDryRun={dryRun}
+          onSubmit={submit}
+          renderFields={(form) => {
+            const isDryRun = form.watch("dry_run");
+            const selected = form.watch("model_path");
+            if (!selected && models[0]?.filename) {
+              form.setValue("model_path", models[0].filename, { shouldValidate: true });
+            }
+            return (
+              <>
+                <div>
+                  <FieldLabel>{t("console.signals.fields.modelPath")}</FieldLabel>
+                  <Select
+                    options={modelOptions}
+                    value={form.watch("model_path")}
+                    onChange={(value) => form.setValue("model_path", value, { shouldValidate: true })}
+                    searchable
+                  />
+                </div>
+                <div>
+                  <FieldLabel>{t("console.signals.fields.configOverride")}</FieldLabel>
+                  <TextInput
+                    value={configOverride}
+                    onChange={setConfigOverride}
+                    placeholder="config/daily_csi1000.yaml"
+                  />
+                </div>
+                <Toggle
+                  checked={isDryRun}
+                  onChange={(checked) => form.setValue("dry_run", checked)}
+                  label={t("console.signals.fields.dryRun")}
+                />
+                <button
+                  type="submit"
+                  data-testid="signals-generate-submit"
+                  disabled={!form.watch("model_path")}
+                  className="rounded-sm border border-terminal-green px-3 py-1.5 text-xs font-mono text-terminal-green transition-colors hover:bg-terminal-green-glow disabled:opacity-30"
+                >
+                  {isDryRun ? t("console.signals.actions.preview") : t("console.signals.actions.submit")}
+                </button>
+              </>
+            );
+          }}
+        />
         {error && <p className="text-xs font-mono text-terminal-red">{error}</p>}
-        <PreviewBlock result={result} />
+        <DryRunPreview
+          loading={preview.loading}
+          error={preview.error}
+          preview={preview.preview}
+          renderPreview={(value) => <PreviewDetails preview={value as Record<string, unknown>} />}
+        />
       </div>
     </Card>
   );
@@ -323,118 +337,180 @@ function GenerateAction() {
 
 function RebalanceAction() {
   const { t } = useTranslation();
-  const [config, setConfig] = useState("config/daily_csi1000.yaml");
-  const [positions, setPositions] = useState("");
-  const [positionDate, setPositionDate] = useState("");
-  const [minActionValue, setMinActionValue] = useState<number | undefined>(1000);
-  const [skipUpdate, setSkipUpdate] = useState(true);
-  const [force, setForce] = useState(false);
-  const [notifyChannel, setNotifyChannel] = useState("none");
-  const [dryRun, setDryRun] = useState(true);
-  const [confirmSend, setConfirmSend] = useState(false);
   const [pendingRealParams, setPendingRealParams] = useState<RebalanceParams | null>(null);
-  const [result, setResult] = useState<TaskTrigger<Record<string, unknown>> | null>(null);
+  const preview = useDryRunPreview<RebalanceParams, Record<string, unknown>>(triggerRebalance);
   const [error, setError] = useState<string | null>(null);
   const { trackTask } = useTaskTracking({ pageKey: "signals", taskTypeFilter: TASK_TYPES });
 
-  const params = (): RebalanceParams =>
+  const buildParams = (params: RebalanceParams, dryRun: boolean): RebalanceParams =>
     RebalanceSchema.parse({
-      config,
-      positions: positions.trim() || null,
-      position_date: positionDate || null,
-      min_action_value: minActionValue ?? 1000,
-      skip_update: skipUpdate,
-      force,
-      notify_channel: notifyChannel,
+      ...params,
+      positions: params.positions?.trim() || null,
+      position_date: params.position_date || null,
+      min_action_value: params.min_action_value ?? 1000,
       dry_run: dryRun,
-      confirm_send: dryRun ? false : confirmSend,
+      confirm_send: dryRun ? false : params.confirm_send,
     });
 
-  const submit = async (payload: RebalanceParams) => {
-    const response = await triggerRebalance(payload);
-    setResult(response);
-    trackTask(response.task_id);
-  };
-
-  const handleClick = () => {
+  const dryRun = async (params: RebalanceParams) => {
     setError(null);
     try {
-      const payload = params();
-      if (!payload.dry_run) {
-        setPendingRealParams(payload);
-        return;
-      }
-      submit(payload).catch((err) => setError(String(err)));
+      const response = await preview.run(buildParams(params, true));
+      trackTask(response.task_id);
+      return response;
     } catch (err) {
-      setError(String(err));
+      setError(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  };
+
+  const submit = async (params: RebalanceParams) => {
+    setError(null);
+    try {
+      const realParams = buildParams(params, false);
+      const dryRunResponse = await preview.run({ ...realParams, dry_run: true, confirm_send: false });
+      trackTask(dryRunResponse.task_id);
+      setPendingRealParams(realParams);
+      return null;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  };
+
+  const confirmRebalance = async () => {
+    const payload = pendingRealParams;
+    if (!payload) return;
+    setPendingRealParams(null);
+    try {
+      const response = await triggerRebalance(payload);
+      trackTask(response.task_id);
+      window.dispatchEvent(new CustomEvent("console:task-created", { detail: { taskId: response.task_id } }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   };
 
   return (
     <Card title={t("console.signals.rebalance.title")} accent="amber">
       <div className="space-y-4">
-        <div>
-          <FieldLabel>{t("console.signals.fields.config")}</FieldLabel>
-          <TextInput value={config} onChange={setConfig} />
-        </div>
-        <div>
-          <FieldLabel>{t("console.signals.fields.positions")}</FieldLabel>
-          <TextArea
-            value={positions}
-            onChange={setPositions}
-            placeholder="SH600000:500,SZ000001:300"
-            rows={2}
-          />
-        </div>
-        <div className="grid grid-cols-2 gap-3">
-          <div>
-            <FieldLabel>{t("console.signals.fields.positionDate")}</FieldLabel>
-            <DatePicker value={positionDate} onChange={setPositionDate} />
-          </div>
-          <div>
-            <FieldLabel>{t("console.signals.fields.minActionValue")}</FieldLabel>
-            <NumberInput
-              value={minActionValue}
-              onChange={setMinActionValue}
-              min={0}
-              step={500}
-            />
-          </div>
-        </div>
-        <div>
-          <FieldLabel>{t("console.signals.fields.notifyChannel")}</FieldLabel>
-          <Select options={REBALANCE_CHANNELS} value={notifyChannel} onChange={setNotifyChannel} />
-        </div>
-        <div className="flex flex-wrap gap-4">
-          <Toggle
-            checked={dryRun}
-            onChange={(checked) => {
-              setDryRun(checked);
-              if (checked) setConfirmSend(false);
-            }}
-            label={t("console.signals.fields.dryRun")}
-          />
-          <Toggle checked={skipUpdate} onChange={setSkipUpdate} label={t("console.signals.fields.skipUpdate")} />
-          <Toggle checked={force} onChange={setForce} label={t("console.signals.fields.force")} />
-          {!dryRun && (
-            <Toggle
-              checked={confirmSend}
-              onChange={setConfirmSend}
-              label={t("console.signals.fields.confirmSend")}
-              danger
-            />
-          )}
-        </div>
-        <ActionButton
-          onClick={handleClick}
-          disabled={!config || (!dryRun && !confirmSend)}
-          danger={!dryRun}
-          testId="signals-rebalance-submit"
-        >
-          {dryRun ? t("console.signals.actions.preview") : t("console.signals.actions.rebalanceReal")}
-        </ActionButton>
+        <ExecutionForm<RebalanceParams>
+          pageKey="signals"
+          actionKey="signals.rebalance"
+          schema={RebalanceSchema}
+          defaults={{
+            config: "config/daily_csi1000.yaml",
+            positions: null,
+            position_date: null,
+            min_action_value: 1000,
+            skip_update: true,
+            force: false,
+            notify_channel: "none",
+            dry_run: true,
+            confirm_send: false,
+          }}
+          dryRunDefault
+          onDryRun={dryRun}
+          onSubmit={submit}
+          destructive
+          renderFields={(form) => {
+            const isDryRun = form.watch("dry_run");
+            const confirmSend = form.watch("confirm_send");
+            return (
+              <>
+                <div>
+                  <FieldLabel>{t("console.signals.fields.config")}</FieldLabel>
+                  <TextInput
+                    value={form.watch("config")}
+                    onChange={(value) => form.setValue("config", value, { shouldValidate: true })}
+                  />
+                </div>
+                <div>
+                  <FieldLabel>{t("console.signals.fields.positions")}</FieldLabel>
+                  <TextArea
+                    value={form.watch("positions") ?? ""}
+                    onChange={(value) => form.setValue("positions", value || null)}
+                    placeholder="SH600000:500,SZ000001:300"
+                    rows={2}
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <FieldLabel>{t("console.signals.fields.positionDate")}</FieldLabel>
+                    <DatePicker
+                      value={form.watch("position_date") ?? ""}
+                      onChange={(value) => form.setValue("position_date", value || null)}
+                    />
+                  </div>
+                  <div>
+                    <FieldLabel>{t("console.signals.fields.minActionValue")}</FieldLabel>
+                    <NumberInput
+                      value={form.watch("min_action_value")}
+                      onChange={(value) => form.setValue("min_action_value", value ?? 1000)}
+                      min={0}
+                      step={500}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <FieldLabel>{t("console.signals.fields.notifyChannel")}</FieldLabel>
+                  <Select
+                    options={REBALANCE_CHANNELS}
+                    value={form.watch("notify_channel")}
+                    onChange={(value) => form.setValue("notify_channel", value as RebalanceParams["notify_channel"])}
+                  />
+                </div>
+                <div className="flex flex-wrap gap-4">
+                  <Toggle
+                    checked={isDryRun}
+                    onChange={(checked) => {
+                      form.setValue("dry_run", checked);
+                      if (checked) form.setValue("confirm_send", false);
+                    }}
+                    label={t("console.signals.fields.dryRun")}
+                  />
+                  <Toggle
+                    checked={form.watch("skip_update")}
+                    onChange={(checked) => form.setValue("skip_update", checked)}
+                    label={t("console.signals.fields.skipUpdate")}
+                  />
+                  <Toggle
+                    checked={form.watch("force")}
+                    onChange={(checked) => form.setValue("force", checked)}
+                    label={t("console.signals.fields.force")}
+                  />
+                  {!isDryRun && (
+                    <Toggle
+                      checked={confirmSend}
+                      onChange={(checked) => form.setValue("confirm_send", checked, { shouldValidate: true })}
+                      label={t("console.signals.fields.confirmSend")}
+                      danger
+                    />
+                  )}
+                </div>
+                <button
+                  type="submit"
+                  data-testid="signals-rebalance-submit"
+                  disabled={!form.watch("config") || (!isDryRun && !confirmSend)}
+                  className={`rounded-sm border px-3 py-1.5 text-xs font-mono transition-colors disabled:opacity-30 ${
+                    !isDryRun
+                      ? "border-terminal-red text-terminal-red hover:bg-terminal-red-glow"
+                      : "border-terminal-green text-terminal-green hover:bg-terminal-green-glow"
+                  }`}
+                >
+                  {isDryRun ? t("console.signals.actions.preview") : t("console.signals.actions.rebalanceReal")}
+                </button>
+              </>
+            );
+          }}
+        />
         {error && <p className="text-xs font-mono text-terminal-red">{error}</p>}
-        <PreviewBlock result={result} />
+        <DryRunPreview
+          loading={preview.loading}
+          error={preview.error}
+          preview={preview.preview}
+          renderPreview={(value) => <PreviewDetails preview={value as Record<string, unknown>} />}
+        />
       </div>
       <ConfirmDialog
         open={!!pendingRealParams}
@@ -443,11 +519,7 @@ function RebalanceAction() {
         confirmLabelKey="console.signals.confirm.confirmRealSend"
         destructive
         onCancel={() => setPendingRealParams(null)}
-        onConfirm={() => {
-          const payload = pendingRealParams;
-          setPendingRealParams(null);
-          if (payload) submit(payload).catch((err) => setError(String(err)));
-        }}
+        onConfirm={confirmRebalance}
       />
     </Card>
   );
@@ -455,82 +527,136 @@ function RebalanceAction() {
 
 function NotifyTestAction() {
   const { t } = useTranslation();
-  const [channel, setChannel] = useState("bark");
-  const [message, setMessage] = useState("Dashboard notification test");
-  const [dryRun, setDryRun] = useState(true);
-  const [confirmSend, setConfirmSend] = useState(false);
   const [pendingRealParams, setPendingRealParams] = useState<NotifyTestParams | null>(null);
-  const [result, setResult] = useState<TaskTrigger<Record<string, unknown>> | null>(null);
+  const preview = useDryRunPreview<NotifyTestParams, Record<string, unknown>>(triggerNotifyTest);
   const [error, setError] = useState<string | null>(null);
   const { trackTask } = useTaskTracking({ pageKey: "signals", taskTypeFilter: TASK_TYPES });
 
-  const params = (): NotifyTestParams =>
+  const buildParams = (params: NotifyTestParams, dryRun: boolean): NotifyTestParams =>
     NotifyTestSchema.parse({
-      channel,
-      message,
+      ...params,
       dry_run: dryRun,
-      confirm_send: dryRun ? false : confirmSend,
+      confirm_send: dryRun ? false : params.confirm_send,
     });
 
-  const submit = async (payload: NotifyTestParams) => {
-    const response = await triggerNotifyTest(payload);
-    setResult(response);
-    trackTask(response.task_id);
-  };
-
-  const handleClick = () => {
+  const dryRun = async (params: NotifyTestParams) => {
     setError(null);
     try {
-      const payload = params();
-      if (!payload.dry_run) {
-        setPendingRealParams(payload);
-        return;
-      }
-      submit(payload).catch((err) => setError(String(err)));
+      const response = await preview.run(buildParams(params, true));
+      trackTask(response.task_id);
+      return response;
     } catch (err) {
-      setError(String(err));
+      setError(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  };
+
+  const submit = async (params: NotifyTestParams) => {
+    setError(null);
+    try {
+      const realParams = buildParams(params, false);
+      const dryRunResponse = await preview.run({ ...realParams, dry_run: true, confirm_send: false });
+      trackTask(dryRunResponse.task_id);
+      setPendingRealParams(realParams);
+      return null;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  };
+
+  const confirmNotify = async () => {
+    const payload = pendingRealParams;
+    if (!payload) return;
+    setPendingRealParams(null);
+    try {
+      const response = await triggerNotifyTest(payload);
+      trackTask(response.task_id);
+      window.dispatchEvent(new CustomEvent("console:task-created", { detail: { taskId: response.task_id } }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   };
 
   return (
     <Card title={t("console.signals.notify.title")} accent="red">
       <div className="space-y-4">
-        <div>
-          <FieldLabel>{t("console.signals.fields.notifyChannel")}</FieldLabel>
-          <Select options={NOTIFY_CHANNELS} value={channel} onChange={setChannel} />
-        </div>
-        <div>
-          <FieldLabel>{t("console.signals.fields.message")}</FieldLabel>
-          <TextArea value={message} onChange={setMessage} rows={4} />
-        </div>
-        <div className="flex flex-wrap gap-4">
-          <Toggle
-            checked={dryRun}
-            onChange={(checked) => {
-              setDryRun(checked);
-              if (checked) setConfirmSend(false);
-            }}
-            label={t("console.signals.fields.dryRun")}
-          />
-          {!dryRun && (
-            <Toggle
-              checked={confirmSend}
-              onChange={setConfirmSend}
-              label={t("console.signals.fields.confirmSend")}
-              danger
-            />
-          )}
-        </div>
-        <ActionButton
-          onClick={handleClick}
-          disabled={!message.trim() || (!dryRun && !confirmSend)}
-          danger={!dryRun}
-          testId="signals-notify-submit"
-        >
-          {dryRun ? t("console.signals.actions.preview") : t("console.signals.actions.notifyReal")}
-        </ActionButton>
+        <ExecutionForm<NotifyTestParams>
+          pageKey="signals"
+          actionKey="signals.notify_test"
+          schema={NotifyTestSchema}
+          defaults={{
+            channel: "bark",
+            message: "Dashboard notification test",
+            dry_run: true,
+            confirm_send: false,
+          }}
+          dryRunDefault
+          onDryRun={dryRun}
+          onSubmit={submit}
+          destructive
+          renderFields={(form) => {
+            const isDryRun = form.watch("dry_run");
+            const confirmSend = form.watch("confirm_send");
+            return (
+              <>
+                <div>
+                  <FieldLabel>{t("console.signals.fields.notifyChannel")}</FieldLabel>
+                  <Select
+                    options={NOTIFY_CHANNELS}
+                    value={form.watch("channel")}
+                    onChange={(value) => form.setValue("channel", value as NotifyTestParams["channel"])}
+                  />
+                </div>
+                <div>
+                  <FieldLabel>{t("console.signals.fields.message")}</FieldLabel>
+                  <TextArea
+                    value={form.watch("message")}
+                    onChange={(value) => form.setValue("message", value, { shouldValidate: true })}
+                    rows={4}
+                  />
+                </div>
+                <div className="flex flex-wrap gap-4">
+                  <Toggle
+                    checked={isDryRun}
+                    onChange={(checked) => {
+                      form.setValue("dry_run", checked);
+                      if (checked) form.setValue("confirm_send", false);
+                    }}
+                    label={t("console.signals.fields.dryRun")}
+                  />
+                  {!isDryRun && (
+                    <Toggle
+                      checked={confirmSend}
+                      onChange={(checked) => form.setValue("confirm_send", checked, { shouldValidate: true })}
+                      label={t("console.signals.fields.confirmSend")}
+                      danger
+                    />
+                  )}
+                </div>
+                <button
+                  type="submit"
+                  data-testid="signals-notify-submit"
+                  disabled={!form.watch("message").trim() || (!isDryRun && !confirmSend)}
+                  className={`rounded-sm border px-3 py-1.5 text-xs font-mono transition-colors disabled:opacity-30 ${
+                    !isDryRun
+                      ? "border-terminal-red text-terminal-red hover:bg-terminal-red-glow"
+                      : "border-terminal-green text-terminal-green hover:bg-terminal-green-glow"
+                  }`}
+                >
+                  {isDryRun ? t("console.signals.actions.preview") : t("console.signals.actions.notifyReal")}
+                </button>
+              </>
+            );
+          }}
+        />
         {error && <p className="text-xs font-mono text-terminal-red">{error}</p>}
-        <PreviewBlock result={result} />
+        <DryRunPreview
+          loading={preview.loading}
+          error={preview.error}
+          preview={preview.preview}
+          renderPreview={(value) => <PreviewDetails preview={value as Record<string, unknown>} />}
+        />
       </div>
       <ConfirmDialog
         open={!!pendingRealParams}
@@ -539,11 +665,7 @@ function NotifyTestAction() {
         confirmLabelKey="console.signals.confirm.confirmRealSend"
         destructive
         onCancel={() => setPendingRealParams(null)}
-        onConfirm={() => {
-          const payload = pendingRealParams;
-          setPendingRealParams(null);
-          if (payload) submit(payload).catch((err) => setError(String(err)));
-        }}
+        onConfirm={confirmNotify}
       />
     </Card>
   );

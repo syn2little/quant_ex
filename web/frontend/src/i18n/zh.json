@@ -531,6 +531,7 @@
         "lgbmParams": "LightGBM 参数 JSON",
         "previewButton": "预览训练",
         "runButton": "开始训练",
+        "confirmTitle": "确认模型训练",
         "finalMarket": "实际生效市场",
         "outputPath": "输出",
         "estimatedMinutes": "预计分钟",
@@ -542,6 +543,7 @@
         "destructive": "危险操作",
         "previewButton": "预览删除",
         "runButton": "删除模型",
+        "confirmTitle": "确认删除模型",
         "confirm": "确认删除该模型及其旁路文件?",
         "filesCount": "影响 {{count}} 个文件",
         "noModels": "无模型"

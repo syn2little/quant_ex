@@ -8,8 +8,14 @@ import { EChartsWrapper } from "../components/ui/EChartsWrapper";
 import { Select } from "../components/ui/Select";
 import { Skeleton, SkeletonTable } from "../components/ui/Skeleton";
 import { Table } from "../components/ui/Table";
-import { ConsolePageLayout } from "../components/console/ConsolePageLayout";
+import {
+  ConfirmDialog,
+  ConsolePageLayout,
+  DryRunPreview,
+  ExecutionForm,
+} from "../components/console";
 import { useTaskTracking } from "../hooks/useTaskTracking";
+import { useDryRunPreview } from "../hooks/useDryRunPreview";
 import {
   getModelImportance,
   getModelMeta,
@@ -218,182 +224,263 @@ function TrainActionCard({
 }) {
   const { t } = useTranslation();
   const { trackTask } = useTaskTracking({ pageKey: "models", taskTypeFilter: TASK_FILTERS });
-  const [modelType, setModelType] = useState("lgbm");
-  const [tag, setTag] = useState("web");
-  const [market, setMarket] = useState("csi300");
-  const [trainStartDate, setTrainStartDate] = useState("");
-  const [trainEndDate, setTrainEndDate] = useState("");
-  const [configOverride, setConfigOverride] = useState("");
-  const [trainingMode, setTrainingMode] = useState("custom");
   const [factorNames, setFactorNames] = useState("");
-  const [withSector, setWithSector] = useState(false);
-  const [noExtraFactors, setNoExtraFactors] = useState(false);
-  const [skipFactorPipeline, setSkipFactorPipeline] = useState(false);
   const [ensembleSeeds, setEnsembleSeeds] = useState("");
   const [baggingFraction, setBaggingFraction] = useState("");
   const [lgbmParams, setLgbmParams] = useState("");
-  const [dryRun, setDryRun] = useState(true);
-  const [preview, setPreview] = useState<TrainPreview | null>(null);
+  const preview = useDryRunPreview<TrainParams, TrainPreview>(triggerTrain);
+  const [pendingTrainParams, setPendingTrainParams] = useState<TrainParams | null>(null);
+  const [pendingTrainPreview, setPendingTrainPreview] = useState<TrainPreview | null>(null);
   const [taskId, setTaskId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-
-  useEffect(() => {
-    const first = registry?.models[0]?.name;
-    if (first) setModelType(first);
-  }, [registry]);
 
   const modelOptions = registry?.models.map((model) => ({
     value: model.name,
     label: model.name,
-  })) ?? [{ value: modelType, label: modelType }];
+  })) ?? [{ value: "lgbm", label: "lgbm" }];
   const factorOptionsText = registry?.factors.slice(0, 10).map((factor) => factor.name).join(", ");
 
-  const finalMarket = preview?.final_market ? String(preview.final_market) : "";
-  const marketMismatch = Boolean(finalMarket && finalMarket !== market);
+  const buildParams = (params: TrainParams, dryRun: boolean): TrainParams =>
+    TrainSchema.parse({
+      ...params,
+      config_override: params.config_override?.trim() || null,
+      train_start_date: params.train_start_date || null,
+      train_end_date: params.train_end_date || null,
+      factors: parseCsvList(factorNames),
+      ensemble_seeds: parseSeeds(ensembleSeeds),
+      bagging_fraction: parseOptionalNumber(baggingFraction),
+      lgbm_params: parseJsonObject(lgbmParams),
+      dry_run: dryRun,
+    });
 
-  const submit = async () => {
-    setSubmitting(true);
+  const dryRun = async (params: TrainParams) => {
     setError(null);
     try {
-      const params: TrainParams = TrainSchema.parse({
-        model_type: modelType,
-        tag,
-        market,
-        train_start_date: trainStartDate || null,
-        train_end_date: trainEndDate || null,
-        config_override: configOverride.trim() || null,
-        factors: parseCsvList(factorNames),
-        qlib_native: trainingMode === "qlib_native",
-        with_sector: withSector,
-        no_extra_factors: noExtraFactors,
-        skip_factor_pipeline: skipFactorPipeline,
-        ensemble_seeds: parseSeeds(ensembleSeeds),
-        bagging_fraction: parseOptionalNumber(baggingFraction),
-        lgbm_params: parseJsonObject(lgbmParams),
-        dry_run: dryRun,
-      });
-      const result = await triggerTrain(params);
+      const result = await preview.run(buildParams(params, true));
       setTaskId(result.task_id);
       trackTask(result.task_id);
-      setPreview(result.preview);
       onTriggered();
+      return result;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSubmitting(false);
+      throw err;
+    }
+  };
+
+  const submit = async (params: TrainParams) => {
+    setError(null);
+    try {
+      const realParams = buildParams(params, false);
+      const dryRunResult = await preview.run({ ...realParams, dry_run: true });
+      trackTask(dryRunResult.task_id);
+      setTaskId(dryRunResult.task_id);
+      setPendingTrainParams(realParams);
+      setPendingTrainPreview(dryRunResult.preview);
+      return null;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  };
+
+  const confirmTrain = async () => {
+    if (!pendingTrainParams) return;
+    setError(null);
+    try {
+      const result = await triggerTrain(pendingTrainParams);
+      setTaskId(result.task_id);
+      trackTask(result.task_id);
+      setPendingTrainParams(null);
+      onTriggered();
+      window.dispatchEvent(new CustomEvent("console:task-created", { detail: { taskId: result.task_id } }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   };
 
   return (
-    <Card
-      title={t("console.models.train.title")}
-      accent="green"
-      actions={
-        <Badge variant={dryRun ? "warning" : "success"}>
-          {dryRun ? t("console.models.dryRun") : t("console.models.liveRun")}
-        </Badge>
-      }
-    >
+    <Card title={t("console.models.train.title")} accent="green">
       <div className="space-y-4">
-        <div className="grid gap-4 md:grid-cols-2">
-          <div>
-            <FieldLabel>{t("console.models.train.modelType")}</FieldLabel>
-            <Select options={modelOptions} value={modelType} onChange={setModelType} searchable />
-          </div>
-          <div>
-            <FieldLabel>{t("console.models.train.tag")}</FieldLabel>
-            <TextInput value={tag} onChange={setTag} placeholder="web" />
-          </div>
-          <div>
-            <FieldLabel>{t("console.models.train.market")}</FieldLabel>
-            <Select options={MARKET_OPTIONS} value={market} onChange={setMarket} />
-          </div>
-          <div>
-            <FieldLabel>{t("console.models.train.configOverride")}</FieldLabel>
-            <TextInput
-              value={configOverride}
-              onChange={setConfigOverride}
-              placeholder="config/daily_csi1000.yaml"
-            />
-          </div>
-          <div>
-            <FieldLabel>{t("console.models.train.trainingMode")}</FieldLabel>
-            <Select
-              options={[
-                { value: "custom", label: t("console.models.train.customMode") },
-                { value: "qlib_native", label: t("console.models.train.qlibNativeMode") },
-              ]}
-              value={trainingMode}
-              onChange={setTrainingMode}
-            />
-          </div>
-          <div>
-            <FieldLabel>{t("console.models.train.startDate")}</FieldLabel>
-            <DatePicker value={trainStartDate} onChange={setTrainStartDate} />
-          </div>
-          <div>
-            <FieldLabel>{t("console.models.train.endDate")}</FieldLabel>
-            <DatePicker value={trainEndDate} onChange={setTrainEndDate} />
-          </div>
-        </div>
+        <ExecutionForm<TrainParams>
+          pageKey="models"
+          actionKey="models.train"
+          schema={TrainSchema}
+          defaults={{
+            model_type: registry?.models[0]?.name ?? "lgbm",
+            tag: "web",
+            market: "csi300",
+            train_start_date: null,
+            train_end_date: null,
+            config_override: null,
+            factors: [],
+            qlib_native: false,
+            with_sector: false,
+            no_extra_factors: false,
+            skip_factor_pipeline: false,
+            ensemble_seeds: null,
+            bagging_fraction: null,
+            lgbm_params: null,
+            dry_run: true,
+          }}
+          dryRunDefault
+          onDryRun={dryRun}
+          onSubmit={submit}
+          renderFields={(form) => {
+            const formPreview = preview.preview;
+            const finalMarket = formPreview?.final_market ? String(formPreview.final_market) : "";
+            const market = form.watch("market");
+            const marketMismatch = Boolean(finalMarket && finalMarket !== market);
+            const isDryRun = form.watch("dry_run");
 
-        <div className="grid gap-4 rounded-sm border border-terminal-border bg-terminal-raised p-4 md:grid-cols-2">
-          <div className="md:col-span-2">
-            <div className="mb-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-terminal-text-dim">
-              <SlidersHorizontal className="h-3.5 w-3.5" />
-              {t("console.models.train.researchConfig")}
-            </div>
-            <FieldLabel>{t("console.models.train.factorNames")}</FieldLabel>
-            <TextInput
-              value={factorNames}
-              onChange={setFactorNames}
-              placeholder={factorOptionsText || "northbound, sector"}
-            />
-          </div>
-          <Toggle checked={withSector} onChange={setWithSector}>
-            {t("console.models.train.withSector")}
-          </Toggle>
-          <Toggle checked={noExtraFactors} onChange={setNoExtraFactors}>
-            {t("console.models.train.noExtraFactors")}
-          </Toggle>
-          <Toggle checked={skipFactorPipeline} onChange={setSkipFactorPipeline}>
-            {t("console.models.train.skipFactorPipeline")}
-          </Toggle>
-          <div>
-            <FieldLabel>{t("console.models.train.ensembleSeeds")}</FieldLabel>
-            <TextInput value={ensembleSeeds} onChange={setEnsembleSeeds} placeholder="42, 123, 2024" />
-          </div>
-          <div>
-            <FieldLabel>{t("console.models.train.baggingFraction")}</FieldLabel>
-            <TextInput value={baggingFraction} onChange={setBaggingFraction} placeholder="0.8" />
-          </div>
-          <div className="md:col-span-2">
-            <FieldLabel>{t("console.models.train.lgbmParams")}</FieldLabel>
-            <TextArea
-              value={lgbmParams}
-              onChange={setLgbmParams}
-              rows={5}
-              placeholder={'{"learning_rate": 0.03, "num_leaves": 64, "n_estimators": 1200}'}
-            />
-          </div>
-        </div>
+            return (
+              <>
+                <div className="grid gap-4 md:grid-cols-2">
+                  <div>
+                    <FieldLabel>{t("console.models.train.modelType")}</FieldLabel>
+                    <Select
+                      options={modelOptions}
+                      value={form.watch("model_type")}
+                      onChange={(value) => form.setValue("model_type", value, { shouldValidate: true })}
+                      searchable
+                    />
+                  </div>
+                  <div>
+                    <FieldLabel>{t("console.models.train.tag")}</FieldLabel>
+                    <TextInput
+                      value={form.watch("tag")}
+                      onChange={(value) => form.setValue("tag", value, { shouldValidate: true })}
+                      placeholder="web"
+                    />
+                  </div>
+                  <div>
+                    <FieldLabel>{t("console.models.train.market")}</FieldLabel>
+                    <Select
+                      options={MARKET_OPTIONS}
+                      value={form.watch("market")}
+                      onChange={(value) => form.setValue("market", value as TrainParams["market"], { shouldValidate: true })}
+                    />
+                  </div>
+                  <div>
+                    <FieldLabel>{t("console.models.train.configOverride")}</FieldLabel>
+                    <TextInput
+                      value={form.watch("config_override") ?? ""}
+                      onChange={(value) => form.setValue("config_override", value || null)}
+                      placeholder="config/daily_csi1000.yaml"
+                    />
+                  </div>
+                  <div>
+                    <FieldLabel>{t("console.models.train.trainingMode")}</FieldLabel>
+                    <Select
+                      options={[
+                        { value: "custom", label: t("console.models.train.customMode") },
+                        { value: "qlib_native", label: t("console.models.train.qlibNativeMode") },
+                      ]}
+                      value={form.watch("qlib_native") ? "qlib_native" : "custom"}
+                      onChange={(value) => form.setValue("qlib_native", value === "qlib_native")}
+                    />
+                  </div>
+                  <div>
+                    <FieldLabel>{t("console.models.train.startDate")}</FieldLabel>
+                    <DatePicker
+                      value={form.watch("train_start_date") ?? ""}
+                      onChange={(value) => form.setValue("train_start_date", value || null)}
+                    />
+                  </div>
+                  <div>
+                    <FieldLabel>{t("console.models.train.endDate")}</FieldLabel>
+                    <DatePicker
+                      value={form.watch("train_end_date") ?? ""}
+                      onChange={(value) => form.setValue("train_end_date", value || null)}
+                    />
+                  </div>
+                </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <Toggle checked={dryRun} onChange={setDryRun}>
-            {t("console.models.dryRun")}
-          </Toggle>
-          <button
-            type="button"
-            data-testid="models-train-submit"
-            onClick={submit}
-            disabled={submitting || !modelType || !tag}
-            className="inline-flex items-center gap-2 rounded-sm border border-terminal-green px-3 py-1.5 font-mono text-xs text-terminal-green transition-colors hover:bg-terminal-green-glow disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <Play className="h-3.5 w-3.5" />
-            {dryRun ? t("console.models.train.previewButton") : t("console.models.train.runButton")}
-          </button>
-        </div>
+                <div className="grid gap-4 rounded-sm border border-terminal-border bg-terminal-raised p-4 md:grid-cols-2">
+                  <div className="md:col-span-2">
+                    <div className="mb-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-terminal-text-dim">
+                      <SlidersHorizontal className="h-3.5 w-3.5" />
+                      {t("console.models.train.researchConfig")}
+                    </div>
+                    <FieldLabel>{t("console.models.train.factorNames")}</FieldLabel>
+                    <TextInput
+                      value={factorNames}
+                      onChange={setFactorNames}
+                      placeholder={factorOptionsText || "northbound, sector"}
+                    />
+                  </div>
+                  <Toggle
+                    checked={form.watch("with_sector")}
+                    onChange={(checked) => form.setValue("with_sector", checked)}
+                  >
+                    {t("console.models.train.withSector")}
+                  </Toggle>
+                  <Toggle
+                    checked={form.watch("no_extra_factors")}
+                    onChange={(checked) => form.setValue("no_extra_factors", checked)}
+                  >
+                    {t("console.models.train.noExtraFactors")}
+                  </Toggle>
+                  <Toggle
+                    checked={form.watch("skip_factor_pipeline")}
+                    onChange={(checked) => form.setValue("skip_factor_pipeline", checked)}
+                  >
+                    {t("console.models.train.skipFactorPipeline")}
+                  </Toggle>
+                  <div>
+                    <FieldLabel>{t("console.models.train.ensembleSeeds")}</FieldLabel>
+                    <TextInput value={ensembleSeeds} onChange={setEnsembleSeeds} placeholder="42, 123, 2024" />
+                  </div>
+                  <div>
+                    <FieldLabel>{t("console.models.train.baggingFraction")}</FieldLabel>
+                    <TextInput value={baggingFraction} onChange={setBaggingFraction} placeholder="0.8" />
+                  </div>
+                  <div className="md:col-span-2">
+                    <FieldLabel>{t("console.models.train.lgbmParams")}</FieldLabel>
+                    <TextArea
+                      value={lgbmParams}
+                      onChange={setLgbmParams}
+                      rows={5}
+                      placeholder={'{"learning_rate": 0.03, "num_leaves": 64, "n_estimators": 1200}'}
+                    />
+                  </div>
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <Toggle
+                    checked={isDryRun}
+                    onChange={(checked) => form.setValue("dry_run", checked)}
+                  >
+                    {t("console.models.dryRun")}
+                  </Toggle>
+                  <Badge variant={isDryRun ? "warning" : "success"}>
+                    {isDryRun ? t("console.models.dryRun") : t("console.models.liveRun")}
+                  </Badge>
+                  <button
+                    type="submit"
+                    data-testid="models-train-submit"
+                    disabled={!form.watch("model_type") || !form.watch("tag")}
+                    className="inline-flex items-center gap-2 rounded-sm border border-terminal-green px-3 py-1.5 font-mono text-xs text-terminal-green transition-colors hover:bg-terminal-green-glow disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <Play className="h-3.5 w-3.5" />
+                    {isDryRun ? t("console.models.train.previewButton") : t("console.models.train.runButton")}
+                  </button>
+                </div>
+
+                {marketMismatch && (
+                  <div className="flex gap-2 rounded-sm border border-terminal-red bg-terminal-red-glow p-3 font-mono text-xs text-terminal-red">
+                    <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                    <span>
+                      {t("console.models.train.marketMismatch", {
+                        selected: market,
+                        final: finalMarket,
+                      })}
+                    </span>
+                  </div>
+                )}
+              </>
+            );
+          }}
+        />
 
         {taskId && (
           <p className="font-mono text-xs text-terminal-text-dim">
@@ -402,55 +489,69 @@ function TrainActionCard({
         )}
         {error && <p className="font-mono text-xs text-terminal-red">{error}</p>}
 
-        {preview && (
-          <div className="space-y-3 rounded-sm border border-terminal-border bg-terminal-raised p-4">
-            <div className="flex flex-wrap items-end justify-between gap-3">
-              <div>
-                <p className="font-mono text-[10px] uppercase tracking-wider text-terminal-text-dim">
-                  {t("console.models.train.finalMarket")}
-                </p>
-                <p
-                  className={`font-mono text-2xl font-semibold ${
-                    marketMismatch ? "text-terminal-red" : "text-terminal-green"
-                  }`}
-                  data-testid="train-preview-final-market"
-                >
-                  {finalMarket || "-"}
-                </p>
-              </div>
-              <div className="text-right font-mono text-xs text-terminal-text-dim">
-                <p>{t("console.models.train.outputPath")}: {valueText(preview.output_path)}</p>
-                <p>{t("console.models.train.estimatedMinutes")}: {valueText(preview.estimated_minutes)}</p>
-              </div>
-            </div>
-            {marketMismatch && (
-              <div className="flex gap-2 rounded-sm border border-terminal-red bg-terminal-red-glow p-3 font-mono text-xs text-terminal-red">
-                <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
-                <span>
-                  {t("console.models.train.marketMismatch", {
-                    selected: market,
-                    final: finalMarket,
-                  })}
-                </span>
-              </div>
-            )}
-            <div className="grid gap-2 md:grid-cols-2">
-              {previewItems(preview).map((item) => (
-                <div key={item.label} className="rounded-sm border border-terminal-border bg-terminal-surface px-3 py-2">
-                  <p className="font-mono text-[10px] uppercase tracking-wider text-terminal-text-dim">
-                    {item.label}
-                  </p>
-                  <p className="break-words font-mono text-xs text-terminal-text-bright">
-                    {valueText(item.value)}
-                  </p>
-                </div>
-              ))}
-            </div>
-            <PreviewJson value={preview} />
-          </div>
-        )}
+        <DryRunPreview
+          loading={preview.loading}
+          error={preview.error}
+          preview={preview.preview}
+          renderPreview={(value) => <TrainPreviewPanel preview={value as TrainPreview} />}
+        />
+        <ConfirmDialog
+          open={!!pendingTrainParams}
+          titleKey="console.models.train.confirmTitle"
+          impactSummary={<TrainImpactSummary preview={pendingTrainPreview} />}
+          confirmLabelKey="console.models.train.runButton"
+          onCancel={() => setPendingTrainParams(null)}
+          onConfirm={confirmTrain}
+        />
       </div>
     </Card>
+  );
+}
+
+function TrainImpactSummary({ preview }: { preview: TrainPreview | null }) {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-2 font-mono text-xs">
+      <p>{t("console.models.train.finalMarket")}: {valueText(preview?.final_market)}</p>
+      <p>{t("console.models.train.outputPath")}: {valueText(preview?.output_path ?? preview?.estimated_outputs)}</p>
+      <p>{t("console.models.train.estimatedMinutes")}: {valueText(preview?.estimated_minutes)}</p>
+    </div>
+  );
+}
+
+function TrainPreviewPanel({ preview }: { preview: TrainPreview }) {
+  const { t } = useTranslation();
+  const finalMarket = preview.final_market ? String(preview.final_market) : "";
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-end justify-between gap-3">
+        <div>
+          <p className="font-mono text-[10px] uppercase tracking-wider text-terminal-text-dim">
+            {t("console.models.train.finalMarket")}
+          </p>
+          <p className="font-mono text-2xl font-semibold text-terminal-green" data-testid="train-preview-final-market">
+            {finalMarket || "-"}
+          </p>
+        </div>
+        <div className="text-right font-mono text-xs text-terminal-text-dim">
+          <p>{t("console.models.train.outputPath")}: {valueText(preview.output_path)}</p>
+          <p>{t("console.models.train.estimatedMinutes")}: {valueText(preview.estimated_minutes)}</p>
+        </div>
+      </div>
+      <div className="grid gap-2 md:grid-cols-2">
+        {previewItems(preview).map((item) => (
+          <div key={item.label} className="rounded-sm border border-terminal-border bg-terminal-surface px-3 py-2">
+            <p className="font-mono text-[10px] uppercase tracking-wider text-terminal-text-dim">
+              {item.label}
+            </p>
+            <p className="break-words font-mono text-xs text-terminal-text-bright">
+              {valueText(item.value)}
+            </p>
+          </div>
+        ))}
+      </div>
+      <PreviewJson value={preview} />
+    </div>
   );
 }
 
@@ -463,37 +564,59 @@ function DeleteActionCard({
 }) {
   const { t } = useTranslation();
   const { trackTask } = useTaskTracking({ pageKey: "models", taskTypeFilter: TASK_FILTERS });
-  const [filename, setFilename] = useState("");
-  const [dryRun, setDryRun] = useState(true);
-  const [preview, setPreview] = useState<DeleteModelPreview | null>(null);
+  const preview = useDryRunPreview<DeleteModelParams, DeleteModelPreview>(triggerDelete);
+  const [pendingDeleteParams, setPendingDeleteParams] = useState<DeleteModelParams | null>(null);
+  const [pendingDeletePreview, setPendingDeletePreview] = useState<DeleteModelPreview | null>(null);
   const [taskId, setTaskId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
-
-  useEffect(() => {
-    if (!filename && models[0]?.filename) setFilename(models[0].filename);
-  }, [filename, models]);
 
   const modelOptions = models.map((model) => ({
     value: model.filename,
     label: `${model.filename} (${model.size_mb} MB)`,
   }));
 
-  const submit = async () => {
-    if (!dryRun && !window.confirm(t("console.models.delete.confirm"))) return;
-    setSubmitting(true);
+  const dryRun = async (params: DeleteModelParams) => {
     setError(null);
     try {
-      const params: DeleteModelParams = DeleteModelSchema.parse({ filename, dry_run: dryRun });
-      const result = await triggerDelete(params);
+      const result = await preview.run({ ...params, dry_run: true });
       setTaskId(result.task_id);
       trackTask(result.task_id);
-      setPreview(result.preview);
       onTriggered();
+      return result;
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
-    } finally {
-      setSubmitting(false);
+      throw err;
+    }
+  };
+
+  const submit = async (params: DeleteModelParams) => {
+    setError(null);
+    try {
+      const realParams = DeleteModelSchema.parse({ ...params, dry_run: false });
+      const dryRunResult = await preview.run({ ...realParams, dry_run: true });
+      setTaskId(dryRunResult.task_id);
+      trackTask(dryRunResult.task_id);
+      setPendingDeleteParams(realParams);
+      setPendingDeletePreview(dryRunResult.preview);
+      return null;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+      throw err;
+    }
+  };
+
+  const confirmDelete = async () => {
+    if (!pendingDeleteParams) return;
+    setError(null);
+    try {
+      const result = await triggerDelete(pendingDeleteParams);
+      setTaskId(result.task_id);
+      trackTask(result.task_id);
+      setPendingDeleteParams(null);
+      onTriggered();
+      window.dispatchEvent(new CustomEvent("console:task-created", { detail: { taskId: result.task_id } }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
     }
   };
 
@@ -504,32 +627,53 @@ function DeleteActionCard({
       actions={<Badge variant="error">{t("console.models.delete.destructive")}</Badge>}
     >
       <div className="space-y-4">
-        <div>
-          <FieldLabel>{t("console.models.delete.filename")}</FieldLabel>
-          <Select
-            options={modelOptions}
-            value={filename}
-            onChange={setFilename}
-            searchable
-            placeholder={t("console.models.delete.noModels")}
-          />
-        </div>
+        <ExecutionForm<DeleteModelParams>
+          pageKey="models"
+          actionKey="models.delete"
+          schema={DeleteModelSchema}
+          defaults={{ filename: models[0]?.filename ?? "", dry_run: true }}
+          dryRunDefault
+          onDryRun={dryRun}
+          onSubmit={submit}
+          destructive
+          renderFields={(form) => {
+            const isDryRun = form.watch("dry_run");
+            const selected = form.watch("filename");
 
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <Toggle checked={dryRun} onChange={setDryRun}>
-            {t("console.models.dryRun")}
-          </Toggle>
-          <button
-            type="button"
-            onClick={submit}
-            disabled={submitting || !filename}
-            className="inline-flex items-center gap-2 rounded-sm border border-terminal-red px-3 py-1.5 font-mono text-xs text-terminal-red transition-colors hover:bg-terminal-red-glow disabled:cursor-not-allowed disabled:opacity-40"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            {dryRun ? t("console.models.delete.previewButton") : t("console.models.delete.runButton")}
-          </button>
-        </div>
+            if (!selected && models[0]?.filename) {
+              form.setValue("filename", models[0].filename, { shouldValidate: true });
+            }
 
+            return (
+              <>
+                <div>
+                  <FieldLabel>{t("console.models.delete.filename")}</FieldLabel>
+                  <Select
+                    options={modelOptions}
+                    value={form.watch("filename")}
+                    onChange={(value) => form.setValue("filename", value, { shouldValidate: true })}
+                    searchable
+                    placeholder={t("console.models.delete.noModels")}
+                  />
+                </div>
+
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <Toggle checked={isDryRun} onChange={(checked) => form.setValue("dry_run", checked)}>
+                    {t("console.models.dryRun")}
+                  </Toggle>
+                  <button
+                    type="submit"
+                    disabled={!form.watch("filename")}
+                    className="inline-flex items-center gap-2 rounded-sm border border-terminal-red px-3 py-1.5 font-mono text-xs text-terminal-red transition-colors hover:bg-terminal-red-glow disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                    {isDryRun ? t("console.models.delete.previewButton") : t("console.models.delete.runButton")}
+                  </button>
+                </div>
+              </>
+            );
+          }}
+        />
         {taskId && (
           <p className="font-mono text-xs text-terminal-text-dim">
             {t("console.models.taskId")}: {taskId}
@@ -537,24 +681,44 @@ function DeleteActionCard({
         )}
         {error && <p className="font-mono text-xs text-terminal-red">{error}</p>}
 
-        {preview && (
-          <div className="space-y-3 rounded-sm border border-terminal-border bg-terminal-raised p-4">
-            <div className="flex items-center justify-between gap-3">
-              <p className="font-mono text-xs text-terminal-text">
-                {t("console.models.delete.filesCount", { count: preview.count ?? preview.files?.length ?? 0 })}
-              </p>
-              <Badge variant="warning">{preview.filename ?? filename}</Badge>
-            </div>
-            <ul className="space-y-1 font-mono text-xs text-terminal-text-dim">
-              {(preview.files ?? []).map((file) => (
-                <li key={file}>{file}</li>
-              ))}
-            </ul>
-            <PreviewJson value={preview} />
-          </div>
-        )}
+        <DryRunPreview
+          loading={preview.loading}
+          error={preview.error}
+          preview={preview.preview}
+          renderPreview={(value) => <DeletePreviewPanel preview={value as DeleteModelPreview} />}
+        />
+        <ConfirmDialog
+          open={!!pendingDeleteParams}
+          titleKey="console.models.delete.confirmTitle"
+          impactSummary={<DeletePreviewPanel preview={pendingDeletePreview} />}
+          confirmLabelKey="console.models.delete.runButton"
+          destructive
+          onCancel={() => setPendingDeleteParams(null)}
+          onConfirm={confirmDelete}
+        />
       </div>
     </Card>
+  );
+}
+
+function DeletePreviewPanel({ preview }: { preview: DeleteModelPreview | null }) {
+  const { t } = useTranslation();
+  if (!preview) return null;
+  return (
+    <div className="space-y-3 rounded-sm border border-terminal-border bg-terminal-raised p-4">
+      <div className="flex items-center justify-between gap-3">
+        <p className="font-mono text-xs text-terminal-text">
+          {t("console.models.delete.filesCount", { count: preview.count ?? preview.files?.length ?? 0 })}
+        </p>
+        <Badge variant="warning">{preview.filename ?? "-"}</Badge>
+      </div>
+      <ul className="space-y-1 font-mono text-xs text-terminal-text-dim">
+        {(preview.files ?? []).map((file) => (
+          <li key={file}>{file}</li>
+        ))}
+      </ul>
+      <PreviewJson value={preview} />
+    </div>
   );
 }
 

@@ -531,6 +531,7 @@
         "lgbmParams": "LightGBM params JSON",
         "previewButton": "Preview train",
         "runButton": "Run training",
+        "confirmTitle": "Confirm model training",
         "finalMarket": "Final market",
         "outputPath": "Output",
         "estimatedMinutes": "Est. minutes",
@@ -542,6 +543,7 @@
         "destructive": "Destructive",
         "previewButton": "Preview delete",
         "runButton": "Delete model",
+        "confirmTitle": "Confirm model deletion",
         "confirm": "Delete this model and sidecar files?",
         "filesCount": "{{count}} file(s) affected",
         "noModels": "No models"

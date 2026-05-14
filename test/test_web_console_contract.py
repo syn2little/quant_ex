@@ -71,6 +71,25 @@ def test_execution_form_uses_typed_null_submit_skip_instead_of_string_sentinels(
         assert "pending-confirmation" not in source
 
 
+def test_models_and_signals_actions_use_execution_form_and_shared_confirm_dialogs():
+    models_page = (FRONTEND_SRC / "pages" / "ModelsPage.tsx").read_text(encoding="utf-8")
+    signals_page = (FRONTEND_SRC / "pages" / "SignalsPage.tsx").read_text(encoding="utf-8")
+
+    assert "window.confirm" not in models_page
+    assert "ExecutionForm" in models_page
+    assert "ConfirmDialog" in models_page
+    assert 'actionKey="models.train"' in models_page
+    assert 'actionKey="models.delete"' in models_page
+    assert "setPendingTrainParams" in models_page
+    assert "setPendingDeleteParams" in models_page
+
+    assert "ExecutionForm" in signals_page
+    assert 'actionKey="signals.generate"' in signals_page
+    assert 'actionKey="signals.rebalance"' in signals_page
+    assert 'actionKey="signals.notify_test"' in signals_page
+    assert "setPendingRealParams" in signals_page
+
+
 def test_data_fetch_returns_unified_envelope_for_dry_run():
     client = TestClient(create_app())
 
