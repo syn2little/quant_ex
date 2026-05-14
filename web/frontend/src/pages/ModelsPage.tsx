@@ -153,6 +153,22 @@ function Toggle({
   );
 }
 
+function AutoSelectFirst({
+  value,
+  first,
+  onSelect,
+}: {
+  value: string;
+  first?: string;
+  onSelect: (value: string) => void;
+}) {
+  useEffect(() => {
+    if (!value && first) onSelect(first);
+  }, [first, onSelect, value]);
+
+  return null;
+}
+
 function parseCsvList(value: string): string[] {
   return value
     .split(",")
@@ -640,12 +656,13 @@ function DeleteActionCard({
             const isDryRun = form.watch("dry_run");
             const selected = form.watch("filename");
 
-            if (!selected && models[0]?.filename) {
-              form.setValue("filename", models[0].filename, { shouldValidate: true });
-            }
-
             return (
               <>
+                <AutoSelectFirst
+                  value={selected}
+                  first={models[0]?.filename}
+                  onSelect={(value) => form.setValue("filename", value, { shouldValidate: true })}
+                />
                 <div>
                   <FieldLabel>{t("console.models.delete.filename")}</FieldLabel>
                   <Select

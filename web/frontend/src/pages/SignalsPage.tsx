@@ -135,6 +135,22 @@ function Toggle({
   );
 }
 
+function AutoSelectFirst({
+  value,
+  first,
+  onSelect,
+}: {
+  value: string;
+  first?: string;
+  onSelect: (value: string) => void;
+}) {
+  useEffect(() => {
+    if (!value && first) onSelect(first);
+  }, [first, onSelect, value]);
+
+  return null;
+}
+
 function PreviewDetails({ preview }: { preview: Record<string, unknown> }) {
   const diff = preview.diff as Record<string, unknown> | undefined;
   const notifyTemplate = preview.notify_template as Record<string, unknown> | undefined;
@@ -284,11 +300,13 @@ function GenerateAction() {
           renderFields={(form) => {
             const isDryRun = form.watch("dry_run");
             const selected = form.watch("model_path");
-            if (!selected && models[0]?.filename) {
-              form.setValue("model_path", models[0].filename, { shouldValidate: true });
-            }
             return (
               <>
+                <AutoSelectFirst
+                  value={selected}
+                  first={models[0]?.filename}
+                  onSelect={(value) => form.setValue("model_path", value, { shouldValidate: true })}
+                />
                 <div>
                   <FieldLabel>{t("console.signals.fields.modelPath")}</FieldLabel>
                   <Select
