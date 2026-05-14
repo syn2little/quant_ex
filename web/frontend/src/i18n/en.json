@@ -392,7 +392,71 @@
       "latest": "Latest",
       "ttlDays": "TTL days"
     },
-    "models": {},
+    "models": {
+      "title": "Models Console",
+      "dryRun": "Dry run",
+      "liveRun": "Live run",
+      "refresh": "Refresh",
+      "taskId": "Task ID",
+      "filename": "Filename",
+      "modelType": "Model",
+      "tag": "Tag",
+      "market": "Market",
+      "sizeMb": "Size MB",
+      "modified": "Modified",
+      "noModels": "No models found.",
+      "overview": {
+        "totalModels": "Total models",
+        "recentTraining": "Recent training runs",
+        "latestModel": "Latest model"
+      },
+      "train": {
+        "title": "Train model",
+        "modelType": "Model type",
+        "tag": "Tag",
+        "market": "Selected market",
+        "configOverride": "Config override",
+        "startDate": "Train start",
+        "endDate": "Train end",
+        "previewButton": "Preview train",
+        "runButton": "Run training",
+        "finalMarket": "Final market",
+        "outputPath": "Output",
+        "estimatedMinutes": "Est. minutes",
+        "marketMismatch": "Final market {{final}} differs from selected market {{selected}}."
+      },
+      "delete": {
+        "title": "Delete model",
+        "filename": "Model file",
+        "destructive": "Destructive",
+        "previewButton": "Preview delete",
+        "runButton": "Delete model",
+        "confirm": "Delete this model and sidecar files?",
+        "filesCount": "{{count}} file(s) affected",
+        "noModels": "No models"
+      },
+      "history": {
+        "tasks": "Training and delete tasks",
+        "models": "Model files and metadata",
+        "created": "Created",
+        "type": "Type",
+        "action": "Action",
+        "status": "Status",
+        "outputs": "Outputs",
+        "noTasks": "No model tasks yet."
+      },
+      "inspect": {
+        "select": "Select model",
+        "meta": "Model meta",
+        "registry": "Registry",
+        "importance": "Feature importance",
+        "registeredModels": "Registered models ({{count}})",
+        "registeredFactors": "Registered factors ({{count}})",
+        "noMeta": "No meta available.",
+        "noRegistry": "Registry unavailable.",
+        "noImportance": "No feature importance available."
+      }
+    },
     "backtest": {},
     "signals": {
       "title": "Signals Console",
