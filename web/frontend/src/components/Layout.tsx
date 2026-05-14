@@ -7,12 +7,12 @@ export function Layout() {
   const location = useLocation();
 
   return (
-    <div className="flex min-h-screen bg-terminal-bg">
+    <div className="flex min-h-screen bg-terminal-bg quant-subtle-grid">
       <Sidebar />
-      <main className="flex-1 overflow-auto relative">
+      <main className="relative flex-1 overflow-auto">
         {/* Top accent line */}
-        <div className="absolute top-0 left-0 right-0 h-px bg-gradient-to-r from-terminal-green/40 via-terminal-border to-transparent" />
-        <div className="p-5">
+        <div className="absolute left-0 right-0 top-0 h-px bg-gradient-to-r from-terminal-green/50 via-terminal-cyan/25 to-transparent" />
+        <div className="px-6 py-5">
           <AnimatePresence mode="wait">
             <motion.div
               key={location.pathname}
@@ -20,6 +20,7 @@ export function Layout() {
               animate={{ opacity: 1, y: 0 }}
               exit={{ opacity: 0, y: -4 }}
               transition={{ duration: 0.15, ease: "easeOut" }}
+              className="mx-auto max-w-[1680px]"
             >
               <Outlet />
             </motion.div>

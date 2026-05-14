@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { UseFormReturn } from "react-hook-form";
 import { useTranslation } from "react-i18next";
-import { Database, Play, RefreshCw, Trash2 } from "lucide-react";
+import { AlertTriangle, Clock, Database, HardDrive, Layers, Play, RefreshCw, Search, Trash2 } from "lucide-react";
 import { Card } from "../components/ui/Card";
+import { Badge } from "../components/ui/Badge";
 import { Tabs } from "../components/ui/Tabs";
 import { Table } from "../components/ui/Table";
 import { Select } from "../components/ui/Select";
@@ -27,8 +28,8 @@ import {
   fetchSectorRotation,
   fetchAltData,
 } from "../api/client";
-import { getCacheStatus, triggerFetch, triggerPurge } from "../api/data";
-import type { CacheStatus, DataFetchPreview, DataPurgePreview } from "../api/data";
+import { getCacheStatus, getDataRuntimeInfo, triggerFetch, triggerPurge } from "../api/data";
+import type { CacheStatus, DataFetchPreview, DataPurgePreview, DataRuntimeInfo } from "../api/data";
 import type { StockQuote, SectorInfo, SectorRotation, AltDataResponse, TaskState } from "../api/types";
 import { FetchSchema, PurgeSchema } from "../schemas/data";
 import type { DataType, FetchParams, PurgeParams } from "../schemas/data";
@@ -81,6 +82,26 @@ function formatBytes(value: number | undefined) {
   return `${(value / 1024 / 1024).toFixed(2)} MB`;
 }
 
+function formatMegabytes(value: number | undefined) {
+  if (!value) return "0 MB";
+  if (value < 1024) return `${value.toFixed(2)} MB`;
+  return `${(value / 1024).toFixed(2)} GB`;
+}
+
+function daysSince(value: string | null | undefined) {
+  if (!value) return null;
+  const timestamp = new Date(value).getTime();
+  if (Number.isNaN(timestamp)) return null;
+  return Math.floor((Date.now() - timestamp) / (24 * 60 * 60 * 1000));
+}
+
+function cacheHealth(cache: CacheStatus) {
+  if (cache.file_count === 0) return { variant: "error" as const, labelKey: "console.data.missing" };
+  const age = daysSince(cache.latest);
+  if (age != null && age > cache.ttl_days) return { variant: "warning" as const, labelKey: "console.data.stale" };
+  return { variant: "success" as const, labelKey: "console.data.fresh" };
+}
+
 function actionButtonLabel(dryRun: boolean, previewLabel: string, submitLabel: string) {
   return dryRun ? previewLabel : submitLabel;
 }
@@ -126,26 +147,37 @@ function DataTypeCheckboxes({ form }: { form: UseFormReturn<FetchParams> }) {
 
 function FetchPreview({ preview }: { preview: DataFetchPreview }) {
   const { t } = useTranslation();
+  const types = preview.data_types?.length ? preview.data_types.join(", ") : "-";
+  const start = preview.date_range?.start || t("console.data.defaultStart");
+  const end = preview.date_range?.end || t("console.data.defaultEnd");
   return (
-    <div className="grid gap-3 text-sm sm:grid-cols-2">
-      <div>
-        <p className="text-xs font-mono uppercase text-terminal-text-dim">{t("console.data.previewFiles")}</p>
-        <p className="font-mono text-terminal-text-bright">{preview.estimated_files ?? 0}</p>
-      </div>
-      <div>
-        <p className="text-xs font-mono uppercase text-terminal-text-dim">{t("console.data.previewMinutes")}</p>
-        <p className="font-mono text-terminal-text-bright">{preview.estimated_minutes ?? 0}</p>
-      </div>
-      <div>
-        <p className="text-xs font-mono uppercase text-terminal-text-dim">{t("console.data.previewDisk")}</p>
-        <p className="font-mono text-terminal-text-bright">{preview.estimated_disk_mb ?? 0} MB</p>
-      </div>
-      <div>
-        <p className="text-xs font-mono uppercase text-terminal-text-dim">{t("console.data.previewSkipped")}</p>
-        <p className="font-mono text-terminal-text-bright">
-          {preview.skipped_cached?.length ? preview.skipped_cached.join(", ") : "-"}
+    <div className="space-y-4 text-sm">
+      <div className="rounded-sm border border-terminal-border-dim bg-terminal-raised p-3">
+        <p className="font-mono text-xs uppercase tracking-wider text-terminal-text-dim">{t("console.data.fetchPlan")}</p>
+        <p className="mt-1 text-terminal-text">
+          {t("console.data.fetchPlanSummary", { types, start, end })}
         </p>
       </div>
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div>
+          <p className="text-xs font-mono uppercase text-terminal-text-dim">{t("console.data.previewFiles")}</p>
+          <p className="font-mono text-terminal-text-bright">{preview.estimated_files ?? 0}</p>
+        </div>
+        <div>
+          <p className="text-xs font-mono uppercase text-terminal-text-dim">{t("console.data.previewMinutes")}</p>
+          <p className="font-mono text-terminal-text-bright">{preview.estimated_minutes ?? 0}</p>
+        </div>
+        <div>
+          <p className="text-xs font-mono uppercase text-terminal-text-dim">{t("console.data.previewDisk")}</p>
+          <p className="font-mono text-terminal-text-bright">{preview.estimated_disk_mb ?? 0} MB</p>
+        </div>
+      </div>
+      <p className="text-xs text-terminal-text-dim">
+        {preview.force_refresh ? t("console.data.forceRefreshPreview") : t("console.data.cacheAwarePreview")}
+      </p>
+      <p className="font-mono text-xs text-terminal-text-dim">
+        {t("console.data.previewSkipped")}: {preview.skipped_cached?.length ? preview.skipped_cached.join(", ") : "-"}
+      </p>
     </div>
   );
 }
@@ -154,6 +186,16 @@ function PurgePreview({ preview }: { preview: DataPurgePreview }) {
   const { t } = useTranslation();
   return (
     <div className="space-y-3 text-sm">
+      <div className="rounded-sm border border-terminal-border-dim bg-terminal-raised p-3">
+        <p className="font-mono text-xs uppercase tracking-wider text-terminal-text-dim">{t("console.data.purgePlan")}</p>
+        <p className="mt-1 text-terminal-text">
+          {t("console.data.purgePlanSummary", {
+            count: preview.count ?? 0,
+            dataType: preview.data_type ?? "-",
+            size: formatBytes(preview.freed_bytes),
+          })}
+        </p>
+      </div>
       <div className="grid gap-3 sm:grid-cols-3">
         <div>
           <p className="text-xs font-mono uppercase text-terminal-text-dim">{t("console.data.dataType")}</p>
@@ -441,26 +483,109 @@ function useCacheStatus() {
   return { cache, loading, refresh };
 }
 
+function useDataRuntime() {
+  const [runtime, setRuntime] = useState<DataRuntimeInfo | null>(null);
+
+  useEffect(() => {
+    getDataRuntimeInfo()
+      .then(setRuntime)
+      .catch(() => setRuntime(null));
+  }, []);
+
+  return runtime;
+}
+
 function OverviewTab() {
   const { t } = useTranslation();
   const { cache, loading } = useCacheStatus();
+  const runtime = useDataRuntime();
   const { tasks } = useTaskTracking({ pageKey: "data", taskTypeFilter: TASK_TYPE_FILTER });
   const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-  const recentTaskCount = tasks.filter((task) => new Date(task.created_at).getTime() >= sevenDaysAgo).length;
+  const recentTasks = tasks
+    .filter((task) => new Date(task.created_at).getTime() >= sevenDaysAgo)
+    .sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
   const totalFiles = cache.reduce((sum, item) => sum + item.file_count, 0);
   const totalSize = cache.reduce((sum, item) => sum + item.total_size_mb, 0);
+  const warnings = cache.filter((item) => cacheHealth(item).variant !== "success");
 
   return (
-    <div className="grid gap-4 md:grid-cols-3">
-      <Card title={t("console.data.cacheFiles")} accent="green">
-        <p className="font-mono text-3xl text-terminal-text-bright">{loading ? "-" : totalFiles}</p>
-      </Card>
-      <Card title={t("console.data.cacheSize")} accent="cyan">
-        <p className="font-mono text-3xl text-terminal-text-bright">{loading ? "-" : totalSize.toFixed(2)} MB</p>
-      </Card>
-      <Card title={t("console.data.recentTasks")} accent="amber">
-        <p className="font-mono text-3xl text-terminal-text-bright">{recentTaskCount}</p>
-      </Card>
+    <div className="space-y-4">
+      <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <Card title={t("console.data.qlibPath")} accent="cyan">
+          <p className="break-all font-mono text-xs text-terminal-text">
+            {runtime?.qlib_data_path || t("dashboard.notConfigured")}
+          </p>
+        </Card>
+        <Card title={t("console.data.cacheFiles")} accent="green">
+          <div className="flex items-center gap-3">
+            <Database className="h-5 w-5 text-terminal-green" />
+            <p className="font-mono text-3xl text-terminal-text-bright">{loading ? "-" : totalFiles}</p>
+          </div>
+        </Card>
+        <Card title={t("console.data.cacheSize")} accent="cyan">
+          <div className="flex items-center gap-3">
+            <HardDrive className="h-5 w-5 text-terminal-cyan" />
+            <p className="font-mono text-3xl text-terminal-text-bright">{loading ? "-" : formatMegabytes(totalSize)}</p>
+          </div>
+        </Card>
+        <Card title={t("console.data.warnings")} accent={warnings.length ? "amber" : "green"}>
+          <div className="flex items-center gap-3">
+            <AlertTriangle className={warnings.length ? "h-5 w-5 text-terminal-amber" : "h-5 w-5 text-terminal-green"} />
+            <p className="font-mono text-3xl text-terminal-text-bright">{loading ? "-" : warnings.length}</p>
+          </div>
+        </Card>
+      </div>
+      <div className="grid gap-4 xl:grid-cols-[1.4fr_1fr]">
+        <Card title={t("console.data.cacheHealth")}>
+          {loading ? (
+            <SkeletonTable rows={5} />
+          ) : (
+            <Table<CacheStatus & Record<string, unknown>>
+              columns={[
+                { key: "type", label: t("console.data.dataType"), sortable: true },
+                {
+                  key: "health",
+                  label: t("console.data.health"),
+                  render: (row) => {
+                    const health = cacheHealth(row);
+                    return <Badge variant={health.variant}>{t(health.labelKey)}</Badge>;
+                  },
+                },
+                { key: "file_count", label: t("console.data.files"), align: "right", sortable: true },
+                { key: "total_size_mb", label: t("console.data.sizeMb"), align: "right", render: (row) => formatMegabytes(row.total_size_mb) },
+                { key: "latest", label: t("console.data.latest"), render: (row) => formatDate(row.latest) },
+                { key: "ttl_days", label: t("console.data.ttlDays"), align: "right" },
+              ]}
+              data={cache as (CacheStatus & Record<string, unknown>)[]}
+              pageSize={8}
+              rowKey="type"
+              emptyMessage={t("console.data.noCache")}
+            />
+          )}
+        </Card>
+        <Card title={t("console.data.recentFetchPurge")} accent="amber">
+          {recentTasks.length ? (
+            <div className="space-y-3">
+              {recentTasks.slice(0, 5).map((task) => (
+                <div key={task.task_id} className="rounded-sm border border-terminal-border-dim bg-terminal-raised px-3 py-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <span className="font-mono text-xs text-terminal-text">{task.task_type}</span>
+                    <Badge variant={task.status === "done" ? "success" : task.status === "failed" ? "error" : "info"}>
+                      {task.status}
+                    </Badge>
+                  </div>
+                  <p className="mt-1 flex items-center gap-1 font-mono text-[11px] text-terminal-text-dim">
+                    <Clock className="h-3 w-3" />
+                    {formatDate(task.created_at)}
+                  </p>
+                </div>
+              ))}
+            </div>
+          ) : (
+            <p className="text-sm text-terminal-text-dim">{t("console.data.noRecentTasks")}</p>
+          )}
+        </Card>
+      </div>
     </div>
   );
 }
@@ -633,9 +758,13 @@ function StockQuotesTab() {
   } : undefined;
 
   return (
-    <div className="flex gap-4">
+    <div className="grid gap-4 lg:grid-cols-[18rem_minmax(0,1fr)]">
       <div className="w-72 shrink-0 space-y-4">
-        <Card>
+        <Card title={t("console.data.quoteLookup")} accent="green">
+          <div className="mb-4 flex items-start gap-3">
+            <Search className="mt-0.5 h-4 w-4 text-terminal-green" />
+            <p className="text-sm text-terminal-text-dim">{t("console.data.quoteLookupHint")}</p>
+          </div>
           <p className="mb-2 text-xs font-mono uppercase tracking-wider text-terminal-text-dim">{t("dataExplorer.search")}</p>
           <SearchInput value={query} onChange={handleSearch} placeholder="600519 / maotai" />
           {searchResults.length > 0 && (
@@ -691,9 +820,13 @@ function StockQuotesTab() {
       <div className="flex-1">
         {loading && <Skeleton className="h-[520px] w-full" />}
         {!loading && chartOption && <EChartsWrapper option={chartOption} height={520} />}
-        {!loading && !chartOption && selectedSymbol && <p className="text-sm text-terminal-text-dim">{t("dataExplorer.noData")}</p>}
+        {!loading && !chartOption && selectedSymbol && (
+          <div className="flex h-96 items-center justify-center rounded-sm border border-terminal-border-dim text-sm text-terminal-text-dim">
+            {t("dataExplorer.noData")}
+          </div>
+        )}
         {!selectedSymbol && (
-          <div className="flex h-96 items-center justify-center text-sm font-mono text-terminal-text-dim">
+          <div className="flex h-96 items-center justify-center rounded-sm border border-terminal-border-dim text-sm font-mono text-terminal-text-dim">
             {t("dataExplorer.searchHint")}
           </div>
         )}
@@ -790,6 +923,12 @@ function SectorsTab() {
 
   return (
     <div className="space-y-4">
+      <Card title={t("console.data.sectorWorkbench")} accent="cyan">
+        <div className="flex items-start gap-3">
+          <Layers className="mt-0.5 h-5 w-5 text-terminal-cyan" />
+          <p className="text-sm text-terminal-text-dim">{t("console.data.sectorWorkbenchHint")}</p>
+        </div>
+      </Card>
       <div className="flex gap-4">
         <div className="flex-1">
           <Table
@@ -844,6 +983,7 @@ function SectorsTab() {
 
 function AltDataTab() {
   const { t } = useTranslation();
+  const { cache } = useCacheStatus();
   const [dataType, setDataType] = useState("northbound");
   const [symbol, setSymbol] = useState("");
   const [startDate, setStartDate] = useState("");
@@ -858,9 +998,34 @@ function AltDataTab() {
       .catch(() => setData(null))
       .finally(() => setLoading(false));
   };
+  const selectedCache = cache.find((item) => item.type === dataType);
 
   return (
     <div className="space-y-4">
+      <Card title={t("console.data.altCoverage")} accent="amber">
+        <div className="grid gap-3 sm:grid-cols-4">
+          <div>
+            <p className="text-xs font-mono uppercase text-terminal-text-dim">{t("console.data.dataType")}</p>
+            <p className="font-mono text-terminal-text-bright">{dataType}</p>
+          </div>
+          <div>
+            <p className="text-xs font-mono uppercase text-terminal-text-dim">{t("console.data.files")}</p>
+            <p className="font-mono text-terminal-text-bright">{selectedCache?.file_count ?? 0}</p>
+          </div>
+          <div>
+            <p className="text-xs font-mono uppercase text-terminal-text-dim">{t("console.data.latest")}</p>
+            <p className="font-mono text-terminal-text-bright">{formatDate(selectedCache?.latest)}</p>
+          </div>
+          <div>
+            <p className="text-xs font-mono uppercase text-terminal-text-dim">{t("console.data.health")}</p>
+            {selectedCache ? (
+              <Badge variant={cacheHealth(selectedCache).variant}>{t(cacheHealth(selectedCache).labelKey)}</Badge>
+            ) : (
+              <Badge variant="neutral">{t("console.data.untracked")}</Badge>
+            )}
+          </div>
+        </div>
+      </Card>
       <div className="flex items-end gap-3">
         <div className="w-48">
           <p className="mb-1 text-xs font-mono uppercase tracking-wider text-terminal-text-dim">Data Type</p>

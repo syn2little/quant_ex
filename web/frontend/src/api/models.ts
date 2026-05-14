@@ -6,6 +6,7 @@ export interface ModelInfo {
   size_mb: number;
   modified: string;
   meta?: Record<string, unknown>;
+  result_paths?: string[];
 }
 
 export interface RegistryInfo {
@@ -24,6 +25,9 @@ export interface TrainPreview {
   config_override?: string | null;
   estimated_minutes?: number;
   output_path?: string;
+  estimated_outputs?: string[];
+  config_source?: Record<string, unknown>;
+  effective_params?: Record<string, unknown>;
   command?: string | string[];
   meta?: Record<string, unknown>;
   [key: string]: unknown;

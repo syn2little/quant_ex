@@ -9,6 +9,10 @@ export type CacheStatus = {
   ttl_days: number;
 };
 
+export type DataRuntimeInfo = {
+  qlib_data_path: string;
+};
+
 export type DataFetchPreview = {
   data_types?: string[];
   date_range?: { start?: string | null; end?: string | null } | null;
@@ -49,5 +53,11 @@ export async function triggerPurge(params: PurgeParams): Promise<TaskTrigger<Dat
 export async function getCacheStatus(): Promise<CacheStatus[]> {
   const response = await fetch("/api/data/cache-status");
   if (!response.ok) throw new Error(`cache-status failed: ${response.status}`);
+  return response.json();
+}
+
+export async function getDataRuntimeInfo(): Promise<DataRuntimeInfo> {
+  const response = await fetch("/api/system/runtime");
+  if (!response.ok) throw new Error(`runtime failed: ${response.status}`);
   return response.json();
 }

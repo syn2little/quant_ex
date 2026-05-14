@@ -48,3 +48,48 @@ export const NotifyTestSchema = z
   });
 export type NotifyTestParams = z.infer<typeof NotifyTestSchema>;
 
+export const RebalanceHoldingSchema = z.object({
+  instrument: z.string(),
+  shares: z.number().nullable(),
+  price: z.number().nullable(),
+  value: z.number().nullable(),
+  weight: z.number().nullable(),
+  entry_date: z.string().nullable().optional(),
+});
+export type RebalanceHolding = z.infer<typeof RebalanceHoldingSchema>;
+
+export const RebalanceActionSchema = z.object({
+  side: z.enum(["buy", "sell"]),
+  instrument: z.string().nullable().optional(),
+  name: z.string().nullable().optional(),
+  amount: z.number().nullable(),
+});
+export type RebalanceAction = z.infer<typeof RebalanceActionSchema>;
+
+export const RebalanceCacheSchema = z.object({
+  filename: z.string(),
+  path: z.string(),
+  size_kb: z.number(),
+  modified: z.string(),
+  trade_date: z.string().nullable().optional(),
+  next_trade_date: z.string().nullable().optional(),
+  created_at: z.string().nullable().optional(),
+  mock: z.boolean(),
+  strategy: z.record(z.string(), z.unknown()),
+  portfolio_value: z.number().nullable(),
+  target_value: z.number().nullable(),
+  holdings_count: z.number(),
+  top_holdings: z.array(RebalanceHoldingSchema),
+  actions: z.array(RebalanceActionSchema),
+  action_summary: z.object({
+    buy_count: z.number(),
+    sell_count: z.number(),
+    buy_amount: z.number(),
+    sell_amount: z.number(),
+    net_amount: z.number(),
+  }),
+  report: z.string(),
+});
+export type RebalanceCache = z.infer<typeof RebalanceCacheSchema>;
+
+export const RebalanceCacheListSchema = z.array(RebalanceCacheSchema);

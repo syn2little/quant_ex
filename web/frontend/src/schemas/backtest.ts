@@ -25,7 +25,7 @@ export const GridSchema = z.object({
   topk_list: NumberListSchema,
   n_drop_list: NumberListSchema,
   hold_thresh_list: NumberListSchema,
-  deal_price: z.enum(["close", "vwap"]).default("close"),
+  deal_price: z.enum(["close", "open"]).default("close"),
   open_cost: z.number().default(0.0005),
   close_cost: z.number().default(0.0015),
   min_cost: z.number().default(5.0),

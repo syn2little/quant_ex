@@ -30,13 +30,13 @@ export function ConfirmDialog({
       aria-modal="true"
       className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
     >
-      <div className="w-[480px] max-w-[90vw] rounded-lg bg-white p-6 shadow-xl">
+      <div className="quant-panel w-[480px] max-w-[90vw] rounded-sm p-6 shadow-xl">
         <h3 className="mb-3 text-lg font-semibold" data-i18n={titleKey}>
           {t(titleKey)}
         </h3>
-        <div className="mb-4 text-sm text-slate-700">{impactSummary}</div>
+        <div className="mb-4 text-sm text-terminal-text">{impactSummary}</div>
         <div className="flex justify-end gap-2">
-          <button type="button" onClick={onCancel} className="rounded border px-3 py-1.5">
+          <button type="button" onClick={onCancel} className="border border-terminal-border px-3 py-1.5 text-sm">
             {t("console.common.cancel")}
           </button>
           <button

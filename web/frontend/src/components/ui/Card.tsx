@@ -22,14 +22,14 @@ export function Card({ title, children, actions, accent = "default", className =
   return (
     <div
       className={clsx(
-        "bg-terminal-surface border border-terminal-border rounded-sm",
+        "quant-panel rounded-sm",
         accent !== "default" && "border-t-2",
         accentMap[accent],
         className
       )}
     >
       {(title || actions) && (
-        <div className="flex items-center justify-between px-4 py-2.5 border-b border-terminal-border-dim">
+        <div className="flex items-center justify-between border-b border-terminal-border-dim px-4 py-2.5">
           {title && (
             <h3 className="text-xs font-mono font-medium text-terminal-text-dim uppercase tracking-wider">
               {title}

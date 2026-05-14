@@ -1,9 +1,11 @@
 import copy
+import json
 import logging
+import re
 import subprocess
 import sys
 import time
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from typing import Optional
 
@@ -16,6 +18,13 @@ from web.api.services.task_manager import get_task_manager
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+_ACTION_RE = re.compile(
+    r"^(?P<side>买入|加仓|减仓|卖出)\s+(?P<instrument>[A-Z]{2}\d{6})\s+(?P<name>[^:：]+).*?约(?P<amount>[\d,]+(?:\.\d+)?)元"
+)
+_HOLDING_RE = re.compile(
+    r"^(?P<instrument>[A-Z]{2}\d{6})\s+(?P<name>[^\[:：]+)(?:\s+\[[^\]]+\])?:\s+(?P<shares>[\d,]+(?:\.\d+)?)股\s+约(?P<value>[\d,]+(?:\.\d+)?)元"
+)
 
 
 def _safe_path(base_dir, filename: str):
@@ -59,6 +68,165 @@ def _fresh_existing_paths(paths: list[Path], started_at: float) -> list[str]:
         except OSError:
             continue
     return result_paths
+
+
+def _rebalance_cache_dir() -> Path:
+    config = get_config()
+    daily_cfg = config.get("daily_rebalance", {})
+    return _resolve_project_path(daily_cfg.get("cache_dir", "signals/daily_rebalance_cache"))
+
+
+def _as_float(value: object) -> Optional[float]:
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.replace(",", ""))
+        except ValueError:
+            return None
+    return None
+
+
+def _position_rows(positions: object) -> list[dict]:
+    if not isinstance(positions, dict):
+        return []
+    rows = []
+    for instrument, payload in positions.items():
+        if not isinstance(payload, dict):
+            continue
+        value = _as_float(payload.get("value"))
+        rows.append(
+            {
+                "instrument": str(instrument),
+                "shares": _as_float(payload.get("shares")),
+                "price": _as_float(payload.get("price")),
+                "value": value,
+                "weight": None,
+                "entry_date": payload.get("entry_date"),
+            }
+        )
+    total = sum(row["value"] or 0 for row in rows)
+    if total > 0:
+        for row in rows:
+            row["weight"] = (row["value"] or 0) / total
+    return sorted(rows, key=lambda row: row["value"] or 0, reverse=True)
+
+
+def _report_holding_rows(report: object) -> list[dict]:
+    if not isinstance(report, str):
+        return []
+    rows = []
+    for line in report.splitlines():
+        match = _HOLDING_RE.search(line.strip())
+        if not match:
+            continue
+        rows.append(
+            {
+                "instrument": match.group("instrument"),
+                "shares": _as_float(match.group("shares")),
+                "price": None,
+                "value": _as_float(match.group("value")),
+                "weight": None,
+                "entry_date": None,
+            }
+        )
+    total = sum(row["value"] or 0 for row in rows)
+    if total > 0:
+        for row in rows:
+            row["weight"] = (row["value"] or 0) / total
+    return sorted(rows, key=lambda row: row["value"] or 0, reverse=True)
+
+
+def _action_rows(data: dict) -> list[dict]:
+    raw_actions = data.get("actions")
+    rows = []
+    if isinstance(raw_actions, list):
+        for action in raw_actions:
+            if not isinstance(action, dict):
+                continue
+            side = str(action.get("side") or action.get("action") or "").lower()
+            amount = _as_float(
+                action.get("amount")
+                or action.get("value")
+                or action.get("trade_value")
+                or action.get("action_value")
+            )
+            rows.append(
+                {
+                    "side": "sell" if "sell" in side or side in {"减仓", "卖出"} else "buy",
+                    "instrument": action.get("instrument") or action.get("symbol"),
+                    "name": action.get("name"),
+                    "amount": abs(amount) if amount is not None else None,
+                }
+            )
+    report = data.get("report")
+    if not rows and isinstance(report, str):
+        for line in report.splitlines():
+            match = _ACTION_RE.search(line.strip())
+            if not match:
+                continue
+            side_text = match.group("side")
+            rows.append(
+                {
+                    "side": "sell" if side_text in {"减仓", "卖出"} else "buy",
+                    "instrument": match.group("instrument"),
+                    "name": match.group("name").strip(),
+                    "amount": _as_float(match.group("amount")),
+                }
+            )
+    return rows
+
+
+def _value_from_positions(rows: list[dict]) -> Optional[float]:
+    total = sum(row["value"] or 0 for row in rows)
+    return total if total > 0 else None
+
+
+def _parse_rebalance_cache(path: Path) -> Optional[dict]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        logger.warning("Failed to parse rebalance cache %s", path, exc_info=True)
+        return None
+    if not isinstance(data, dict):
+        return None
+
+    target_holdings = _position_rows(data.get("target_positions") or data.get("executed_positions"))
+    if not target_holdings:
+        target_holdings = _report_holding_rows(data.get("report"))
+    executed_holdings = _position_rows(data.get("executed_positions"))
+    value_source = data.get("display_portfolio_pnl") or data.get("portfolio_pnl") or data.get("pnl_carry") or {}
+    portfolio_value = _as_float(value_source.get("total_value")) if isinstance(value_source, dict) else None
+    target_value = _value_from_positions(target_holdings)
+    actions = _action_rows(data)
+    buy_amount = sum(action["amount"] or 0 for action in actions if action["side"] == "buy")
+    sell_amount = sum(action["amount"] or 0 for action in actions if action["side"] == "sell")
+    stat = path.stat()
+
+    return {
+        "filename": path.name,
+        "path": str(path),
+        "size_kb": round(stat.st_size / 1024, 1),
+        "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+        "trade_date": data.get("trade_date"),
+        "next_trade_date": data.get("next_trade_date"),
+        "created_at": data.get("created_at"),
+        "mock": bool(data.get("mock", False)),
+        "strategy": data.get("strategy") if isinstance(data.get("strategy"), dict) else {},
+        "portfolio_value": portfolio_value,
+        "target_value": target_value,
+        "holdings_count": len(target_holdings or executed_holdings),
+        "top_holdings": target_holdings[:8],
+        "actions": actions,
+        "action_summary": {
+            "buy_count": sum(1 for action in actions if action["side"] == "buy"),
+            "sell_count": sum(1 for action in actions if action["side"] == "sell"),
+            "buy_amount": buy_amount,
+            "sell_amount": sell_amount,
+            "net_amount": buy_amount - sell_amount,
+        },
+        "report": data.get("report") if isinstance(data.get("report"), str) else "",
+    }
 
 
 @router.get("/regime")
@@ -387,7 +555,6 @@ async def send_notify_test(req: NotifyTestRequest):
 async def signal_history():
     if not SIGNALS_DIR.exists():
         return []
-    from datetime import datetime
     results = []
     for f in sorted(SIGNALS_DIR.glob("signal_*.txt"), reverse=True):
         results.append({
@@ -396,6 +563,19 @@ async def signal_history():
             "modified": datetime.fromtimestamp(f.stat().st_mtime).isoformat(),
         })
     return results
+
+
+@router.get("/rebalance-history")
+async def rebalance_history():
+    cache_dir = _rebalance_cache_dir()
+    if not cache_dir.exists():
+        return []
+    items = []
+    for path in sorted(cache_dir.glob("rebalance_*.json"), reverse=True):
+        parsed = _parse_rebalance_cache(path)
+        if parsed:
+            items.append(parsed)
+    return items
 
 
 @router.get("/history/{filename}")

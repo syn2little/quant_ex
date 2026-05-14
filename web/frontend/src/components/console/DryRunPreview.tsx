@@ -26,7 +26,7 @@ export function DryRunPreview({
   }
   if (!preview) return null;
   return (
-    <div data-testid="dry-run-preview" className="rounded border border-slate-200 bg-slate-50 p-3">
+    <div data-testid="dry-run-preview" className="quant-panel rounded-sm p-3">
       {renderPreview ? (
         renderPreview(preview)
       ) : (

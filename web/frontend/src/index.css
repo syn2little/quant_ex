@@ -7,33 +7,70 @@
 @import "@fontsource/dm-sans/600.css";
 
 @theme {
-  --color-terminal-bg: #f6f8fb;
-  --color-terminal-surface: #ffffff;
-  --color-terminal-raised: #eef3f8;
-  --color-terminal-border: #d7e0ea;
-  --color-terminal-border-dim: #e6edf4;
-  --color-terminal-text: #334155;
-  --color-terminal-text-dim: #64748b;
-  --color-terminal-text-bright: #0f172a;
-  --color-terminal-green: #0f8f55;
-  --color-terminal-green-dim: #0b6f43;
-  --color-terminal-green-glow: rgba(15, 143, 85, 0.12);
-  --color-terminal-amber: #b7791f;
-  --color-terminal-amber-glow: rgba(183, 121, 31, 0.13);
-  --color-terminal-red: #c2414b;
-  --color-terminal-red-glow: rgba(194, 65, 75, 0.12);
-  --color-terminal-cyan: #087d9d;
-  --color-terminal-cyan-glow: rgba(8, 125, 157, 0.12);
+  --color-terminal-bg: #e9eee9;
+  --color-terminal-surface: #f8faf7;
+  --color-terminal-raised: #eef3ef;
+  --color-terminal-border: #cad6cf;
+  --color-terminal-border-dim: #dce5df;
+  --color-terminal-text: #304039;
+  --color-terminal-text-dim: #66736d;
+  --color-terminal-text-bright: #13231d;
+  --color-terminal-green: #15835b;
+  --color-terminal-green-dim: #0e6546;
+  --color-terminal-green-glow: rgba(21, 131, 91, 0.13);
+  --color-terminal-amber: #a16314;
+  --color-terminal-amber-glow: rgba(161, 99, 20, 0.13);
+  --color-terminal-red: #b24444;
+  --color-terminal-red-glow: rgba(178, 68, 68, 0.12);
+  --color-terminal-cyan: #2f7781;
+  --color-terminal-cyan-glow: rgba(47, 119, 129, 0.12);
   --font-sans: "DM Sans", system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
 
 body {
-  background-color: var(--color-terminal-bg);
+  background:
+    linear-gradient(180deg, rgba(248, 250, 247, 0.55), rgba(233, 238, 233, 0.95) 260px),
+    var(--color-terminal-bg);
   color: var(--color-terminal-text);
   font-family: var(--font-sans);
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+input,
+select,
+textarea {
+  background-color: #fbfcfa;
+  border-color: var(--color-terminal-border);
+  color: var(--color-terminal-text-bright);
+}
+
+input:focus,
+select:focus,
+textarea:focus {
+  outline: none;
+  box-shadow: 0 0 0 1px var(--color-terminal-green);
+}
+
+.quant-panel {
+  background: linear-gradient(180deg, rgba(248, 250, 247, 0.98), rgba(242, 246, 242, 0.98));
+  border: 1px solid var(--color-terminal-border);
+  box-shadow: 0 1px 0 rgba(19, 35, 29, 0.04);
+}
+
+.quant-subtle-grid {
+  background-image:
+    linear-gradient(rgba(19, 35, 29, 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(19, 35, 29, 0.035) 1px, transparent 1px);
+  background-size: 28px 28px;
 }
 
 ::selection {

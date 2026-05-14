@@ -99,27 +99,27 @@ export function TaskDrawer({ pageKey, taskTypeFilter, open, onClose }: TaskDrawe
   return (
     <aside
       data-testid="task-drawer"
-      className="fixed right-0 top-0 z-40 h-full w-[420px] max-w-[92vw] overflow-y-auto border-l bg-white shadow-xl"
+      className="fixed right-0 top-0 z-40 h-full w-[460px] max-w-[92vw] overflow-y-auto border-l border-terminal-border bg-terminal-surface shadow-xl"
     >
-      <div className="flex items-center justify-between border-b p-4">
+      <div className="flex items-center justify-between border-b border-terminal-border p-4">
         <h3 className="font-semibold">{t("console.tasks.drawerTitle")} - {pageKey}</h3>
         <button
           type="button"
           onClick={onClose}
           aria-label={t("console.tasks.close")}
           title={t("console.tasks.close")}
-          className="grid h-8 w-8 place-items-center rounded border text-slate-600 hover:bg-slate-50"
+          className="grid h-8 w-8 place-items-center border border-terminal-border text-terminal-text-dim hover:bg-terminal-raised"
         >
           <X className="h-4 w-4" />
         </button>
       </div>
       <div className="grid gap-0 md:grid-cols-[1fr_1.1fr]">
         <div className="max-h-[calc(100vh-65px)] overflow-y-auto border-r">
-          <div className="grid gap-2 border-b p-3 text-xs">
+          <div className="grid gap-2 border-b border-terminal-border p-3 text-xs">
             <label className="grid gap-1">
-              <span className="text-slate-500">{t("console.tasks.statusFilter")}</span>
+              <span className="text-terminal-text-dim">{t("console.tasks.statusFilter")}</span>
               <select
-                className="rounded border px-2 py-1"
+                className="border px-2 py-1"
                 value={statusFilter}
                 onChange={(event) => setStatusFilter(event.target.value as "all" | TaskStatus)}
               >
@@ -130,9 +130,9 @@ export function TaskDrawer({ pageKey, taskTypeFilter, open, onClose }: TaskDrawe
               </select>
             </label>
             <label className="grid gap-1">
-              <span className="text-slate-500">{t("console.tasks.actionFilter")}</span>
+              <span className="text-terminal-text-dim">{t("console.tasks.actionFilter")}</span>
               <select
-                className="rounded border px-2 py-1"
+                className="border px-2 py-1"
                 value={actionFilter}
                 onChange={(event) => setActionFilter(event.target.value)}
               >
@@ -144,7 +144,7 @@ export function TaskDrawer({ pageKey, taskTypeFilter, open, onClose }: TaskDrawe
             </label>
           </div>
           <ul className="divide-y">
-            {filteredTasks.length === 0 && <li className="p-4 text-sm text-slate-500">{t("console.tasks.empty")}</li>}
+            {filteredTasks.length === 0 && <li className="p-4 text-sm text-terminal-text-dim">{t("console.tasks.empty")}</li>}
             {filteredTasks.map((task) => (
               <li key={task.task_id} className="p-3">
                 <div className="flex items-center justify-between gap-3">
@@ -159,9 +159,9 @@ export function TaskDrawer({ pageKey, taskTypeFilter, open, onClose }: TaskDrawe
                     </button>
                   )}
                 </div>
-                <div className="mt-1 text-xs text-slate-500">{task.created_at}</div>
+                <div className="mt-1 text-xs text-terminal-text-dim">{task.created_at}</div>
                 {task.result_paths.length > 0 && (
-                  <ul className="mt-1 list-disc pl-4 text-xs text-blue-700">
+                  <ul className="mt-1 list-disc pl-4 text-xs text-terminal-cyan">
                     {task.result_paths.map((path) => (
                       <li key={path} className="break-all">{path}</li>
                     ))}
@@ -178,7 +178,7 @@ export function TaskDrawer({ pageKey, taskTypeFilter, open, onClose }: TaskDrawe
               <div>
                 <h4 className="mb-2 font-semibold">{t("console.tasks.details")}</h4>
                 <dl className="grid grid-cols-[90px_1fr] gap-2 text-xs">
-                  <dt className="text-slate-500">{t("console.tasks.taskId")}</dt>
+                  <dt className="text-terminal-text-dim">{t("console.tasks.taskId")}</dt>
                   <dd className="flex items-center gap-2 font-mono">
                     <span className="break-all">{selectedTask.task_id}</span>
                     <button
@@ -186,20 +186,20 @@ export function TaskDrawer({ pageKey, taskTypeFilter, open, onClose }: TaskDrawe
                       onClick={() => copyText(selectedTask.task_id)}
                       aria-label={t("console.tasks.copyTaskId")}
                       title={t("console.tasks.copyTaskId")}
-                      className="grid h-6 w-6 shrink-0 place-items-center rounded border text-slate-500 hover:bg-slate-50"
+                      className="grid h-6 w-6 shrink-0 place-items-center border border-terminal-border text-terminal-text-dim hover:bg-terminal-raised"
                     >
                       <Copy className="h-3 w-3" />
                     </button>
                   </dd>
-                  <dt className="text-slate-500">{t("console.tasks.action")}</dt>
+                  <dt className="text-terminal-text-dim">{t("console.tasks.action")}</dt>
                   <dd>{selectedTask.action_key ?? selectedTask.task_type}</dd>
-                  <dt className="text-slate-500">{t("console.tasks.status")}</dt>
+                  <dt className="text-terminal-text-dim">{t("console.tasks.status")}</dt>
                   <dd>{selectedTask.status}</dd>
-                  <dt className="text-slate-500">{t("console.tasks.createdAt")}</dt>
+                  <dt className="text-terminal-text-dim">{t("console.tasks.createdAt")}</dt>
                   <dd>{selectedTask.created_at}</dd>
                   {selectedTask.result_paths.length > 0 && (
                     <>
-                      <dt className="text-slate-500">{t("console.tasks.outputs")}</dt>
+                      <dt className="text-terminal-text-dim">{t("console.tasks.outputs")}</dt>
                       <dd className="space-y-1">
                         {selectedTask.result_paths.map((path) => (
                           <div key={path} className="flex items-start gap-2">
@@ -209,7 +209,7 @@ export function TaskDrawer({ pageKey, taskTypeFilter, open, onClose }: TaskDrawe
                               onClick={() => copyText(path)}
                               aria-label={t("console.tasks.copyPath")}
                               title={t("console.tasks.copyPath")}
-                              className="grid h-6 w-6 shrink-0 place-items-center rounded border text-slate-500 hover:bg-slate-50"
+                              className="grid h-6 w-6 shrink-0 place-items-center border border-terminal-border text-terminal-text-dim hover:bg-terminal-raised"
                             >
                               <Copy className="h-3 w-3" />
                             </button>
@@ -238,23 +238,23 @@ export function TaskDrawer({ pageKey, taskTypeFilter, open, onClose }: TaskDrawe
               )}
               <div>
                 <h4 className="mb-2 font-semibold">{t("console.tasks.result")}</h4>
-                <pre className="max-h-48 overflow-auto rounded bg-slate-50 p-2 text-xs">
+                <pre className="max-h-48 overflow-auto bg-terminal-raised p-2 text-xs">
                   {JSON.stringify(selectedTask.result ?? selectedTask.error ?? {}, null, 2)}
                 </pre>
               </div>
               <div>
                 <h4 className="mb-2 font-semibold">{t("console.tasks.events")}</h4>
                 {selectedEvents.length === 0 ? (
-                  <p className="text-xs text-slate-500">{t("console.tasks.noEvents")}</p>
+                  <p className="text-xs text-terminal-text-dim">{t("console.tasks.noEvents")}</p>
                 ) : (
-                  <pre className="max-h-48 overflow-auto rounded bg-slate-50 p-2 text-xs">
+                  <pre className="max-h-48 overflow-auto bg-terminal-raised p-2 text-xs">
                     {selectedEvents.join("\n")}
                   </pre>
                 )}
               </div>
             </>
           ) : (
-            <p className="text-sm text-slate-500">{t("console.tasks.empty")}</p>
+            <p className="text-sm text-terminal-text-dim">{t("console.tasks.empty")}</p>
           )}
         </section>
       </div>

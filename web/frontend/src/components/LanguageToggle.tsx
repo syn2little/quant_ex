@@ -10,7 +10,7 @@ export function LanguageToggle() {
   };
 
   return (
-    <div className="flex border-t border-terminal-border-dim">
+    <div className="flex border-t border-[#20342c] bg-[#0e1713]">
       {(['en', 'zh'] as const).map((lang) => (
         <button
           key={lang}
@@ -18,8 +18,8 @@ export function LanguageToggle() {
           className={clsx(
             "flex-1 py-2 text-[10px] font-mono font-medium uppercase tracking-wider transition-colors",
             i18n.language === lang
-              ? "text-terminal-green bg-terminal-green-glow"
-              : "text-terminal-text-dim hover:text-terminal-text"
+              ? "bg-[#1b3028] text-[#78ddb0]"
+              : "text-[#8ca59a] hover:text-[#eef6f1]"
           )}
         >
           {lang === 'zh' ? '中' : 'EN'}

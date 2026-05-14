@@ -127,24 +127,65 @@ def test_data_purge_dry_run_real_run_and_validation(client, monkeypatch, tmp_pat
 def test_models_train_dry_run_and_validation(client):
     response = client.post(
         "/api/models/train",
-        json={"model_type": "lgbm", "tag": "ci", "dry_run": True},
+        json={
+            "model_type": "lgbm",
+            "tag": "ci",
+            "market": "csi1000",
+            "train_start_date": "2016-01-01",
+            "train_end_date": "2021-12-31",
+            "qlib_native": False,
+            "with_sector": True,
+            "factors": ["northbound"],
+            "ensemble_seeds": [42, 123],
+            "bagging_fraction": 0.8,
+            "lgbm_params": {"learning_rate": 0.03, "num_leaves": 48},
+            "dry_run": True,
+        },
     )
     assert response.status_code == 200
     body = response.json()
     assert body["dry_run"] is True
     assert body["preview"]["model_type"] == "lgbm"
+    assert body["preview"]["final_market"] == "csi1000"
+    assert body["preview"]["train_window"] == {"start": "2016-01-01", "end": "2021-12-31"}
+    assert body["preview"]["config_source"]["type"] == "default"
+    assert body["preview"]["estimated_outputs"]
+    assert body["preview"]["effective_params"]["with_sector"] is True
+    assert body["preview"]["effective_params"]["custom_factors"] == ["northbound"]
+    assert body["preview"]["effective_params"]["ensemble_seeds"] == [42, 123]
+    assert body["preview"]["effective_params"]["lightgbm"]["learning_rate"] == 0.03
     _assert_task_metadata(client, body, "models", "models.train")
 
     invalid = client.post("/api/models/train", json={})
     assert invalid.status_code == 422
 
+    invalid_bagging = client.post(
+        "/api/models/train",
+        json={"model_type": "lgbm", "tag": "ci", "bagging_fraction": 1.5, "dry_run": True},
+    )
+    assert invalid_bagging.status_code == 422
+
 
 def test_models_train_real_run_mocked(client, monkeypatch):
     model_path = "models/lgbm_ci_20260514_120000.pkl"
-    monkeypatch.setattr(models_router, "_train_model", lambda _req: {"ok": True, "result_paths": [model_path]})
+    captured = {}
+
+    def _fake_train(req):
+        captured["req"] = req
+        return {"ok": True, "result_paths": [model_path]}
+
+    monkeypatch.setattr(models_router, "_train_model", _fake_train)
     response = client.post(
         "/api/models/train",
-        json={"model_type": "lgbm", "tag": "ci", "dry_run": False},
+        json={
+            "model_type": "lgbm",
+            "tag": "ci",
+            "market": "csi800",
+            "train_start_date": "2017-01-01",
+            "ensemble_seeds": [7, 11],
+            "bagging_fraction": 0.7,
+            "dry_run": False,
+        },
     )
 
     assert response.status_code == 200
@@ -156,6 +197,8 @@ def test_models_train_real_run_mocked(client, monkeypatch):
     assert task["result_paths"] == [model_path]
     assert task["page_key"] == "models"
     assert task["action_key"] == "models.train"
+    assert captured["req"].market == "csi800"
+    assert captured["req"].ensemble_seeds == [7, 11]
 
 
 def test_models_delete_dry_run_real_run_and_validation(client, monkeypatch, tmp_path):

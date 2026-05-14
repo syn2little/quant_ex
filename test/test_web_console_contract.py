@@ -91,6 +91,9 @@ def test_models_train_returns_unified_envelope_for_dry_run():
     assert body["dry_run"] is True
     assert body["preview"] is not None
     assert "final_market" in body["preview"]
+    assert "config_source" in body["preview"]
+    assert "estimated_outputs" in body["preview"]
+    assert "effective_params" in body["preview"]
 
 
 def test_models_delete_dry_run_lists_files():

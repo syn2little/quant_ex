@@ -75,6 +75,14 @@ function TextInput({
   );
 }
 
+function ReadOnlyValue({ value }: { value: string }) {
+  return (
+    <div className="w-full rounded-sm border border-terminal-border bg-terminal-bg px-3 py-2 font-mono text-xs text-terminal-text-dim">
+      {value}
+    </div>
+  );
+}
+
 function PreviewBody({ preview }: { preview: unknown }) {
   const typed = preview as BacktestPreview;
   const candidateCount = Number(typed.candidate_count ?? 0);
@@ -162,6 +170,36 @@ function WFVFields({
               })
             }
           />
+        </div>
+      </div>
+      <div className="rounded-sm border border-terminal-border bg-terminal-raised/40 p-3">
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <FieldLabel>{t("console.backtest.executionAssumptions")}</FieldLabel>
+          <span className="font-mono text-[11px] uppercase text-terminal-text-dim">
+            {t("console.backtest.wfvCostUnsupported")}
+          </span>
+        </div>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-5">
+          <div>
+            <FieldLabel>{t("console.backtest.benchmark")}</FieldLabel>
+            <ReadOnlyValue value={t("console.backtest.configDriven")} />
+          </div>
+          <div>
+            <FieldLabel>{t("console.backtest.dealPrice")}</FieldLabel>
+            <ReadOnlyValue value={t("console.backtest.configDriven")} />
+          </div>
+          <div>
+            <FieldLabel>{t("console.backtest.openCost")}</FieldLabel>
+            <ReadOnlyValue value={t("console.backtest.configDriven")} />
+          </div>
+          <div>
+            <FieldLabel>{t("console.backtest.closeCost")}</FieldLabel>
+            <ReadOnlyValue value={t("console.backtest.configDriven")} />
+          </div>
+          <div>
+            <FieldLabel>{t("console.backtest.minCost")}</FieldLabel>
+            <ReadOnlyValue value={t("console.backtest.configDriven")} />
+          </div>
         </div>
       </div>
       <div className="grid grid-cols-1 gap-4 md:grid-cols-3">

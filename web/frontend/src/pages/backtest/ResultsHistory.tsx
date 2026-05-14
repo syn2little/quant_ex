@@ -16,6 +16,9 @@ type HistoryRow = Record<string, unknown> & {
   model: string;
   information_ratio: number | null;
   sharpe: number | null;
+  annual_return: number | null;
+  excess_annual_return: number | null;
+  max_drawdown: number | null;
   deal_price: string;
   status: string;
   task_id: string;
@@ -65,6 +68,9 @@ export function ResultsHistory() {
           model: String(metrics.model ?? metrics.model_path ?? "-"),
           information_ratio: asNumber(metrics.information_ratio ?? metrics.ir),
           sharpe: asNumber(metrics.sharpe),
+          annual_return: asNumber(metrics.annual_return),
+          excess_annual_return: asNumber(metrics.excess_annual_return),
+          max_drawdown: asNumber(metrics.max_drawdown),
           deal_price: String(metrics.deal_price ?? "-"),
           status: task?.status ?? "-",
           task_id: task?.task_id ?? "-",
@@ -125,6 +131,29 @@ export function ResultsHistory() {
               label: "Sharpe",
               align: "right",
               render: (row) => (row.sharpe == null ? "-" : row.sharpe.toFixed(4)),
+            },
+            {
+              key: "annual_return",
+              label: t("console.backtest.annualReturn"),
+              align: "right",
+              render: (row) =>
+                row.annual_return == null ? "-" : `${(row.annual_return * 100).toFixed(2)}%`,
+            },
+            {
+              key: "excess_annual_return",
+              label: t("console.backtest.excessAnnualReturn"),
+              align: "right",
+              render: (row) =>
+                row.excess_annual_return == null
+                  ? "-"
+                  : `${(row.excess_annual_return * 100).toFixed(2)}%`,
+            },
+            {
+              key: "max_drawdown",
+              label: "Max DD",
+              align: "right",
+              render: (row) =>
+                row.max_drawdown == null ? "-" : `${(row.max_drawdown * 100).toFixed(2)}%`,
             },
             { key: "deal_price", label: t("console.backtest.dealPrice") },
             { key: "status", label: t("console.backtest.status") },

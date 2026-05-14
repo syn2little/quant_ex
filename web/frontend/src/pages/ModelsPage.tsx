@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, Play, RefreshCw, Search, Trash2 } from "lucide-react";
+import { AlertTriangle, Play, RefreshCw, Search, SlidersHorizontal, Trash2 } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { Badge } from "../components/ui/Badge";
 import { Card } from "../components/ui/Card";
@@ -52,6 +52,7 @@ function modelRows(models: ModelInfo[]): Record<string, unknown>[] {
     model_type: model.meta?.model_type ?? model.meta?.model ?? model.meta?.name,
     tag: model.meta?.tag,
     market: model.meta?.final_market ?? model.meta?.market ?? model.meta?.universe,
+    result_paths: model.result_paths?.join(", ") ?? "",
   }));
 }
 
@@ -102,6 +103,28 @@ function TextInput({
   );
 }
 
+function TextArea({
+  value,
+  onChange,
+  placeholder,
+  rows = 4,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  rows?: number;
+}) {
+  return (
+    <textarea
+      value={value}
+      rows={rows}
+      onChange={(event) => onChange(event.target.value)}
+      placeholder={placeholder}
+      className="w-full resize-y rounded-sm border border-terminal-border bg-terminal-surface px-3 py-2 font-mono text-xs text-terminal-text transition-colors placeholder:text-terminal-text-dim hover:border-terminal-text-dim focus:border-terminal-green focus:outline-none"
+    />
+  );
+}
+
 function Toggle({
   checked,
   onChange,
@@ -124,6 +147,68 @@ function Toggle({
   );
 }
 
+function parseCsvList(value: string): string[] {
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function parseSeeds(value: string): number[] | null {
+  const items = parseCsvList(value);
+  if (items.length === 0) return null;
+  const seeds = items.map((item) => Number(item));
+  if (seeds.some((seed) => !Number.isInteger(seed))) {
+    throw new Error("ensemble_seeds must be comma-separated integers");
+  }
+  return seeds;
+}
+
+function parseOptionalNumber(value: string): number | null {
+  if (!value.trim()) return null;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) throw new Error("bagging_fraction must be numeric");
+  return parsed;
+}
+
+function parseJsonObject(value: string): Record<string, unknown> | null {
+  if (!value.trim()) return null;
+  const parsed = JSON.parse(value) as unknown;
+  if (!parsed || Array.isArray(parsed) || typeof parsed !== "object") {
+    throw new Error("LightGBM params must be a JSON object");
+  }
+  return parsed as Record<string, unknown>;
+}
+
+function previewItems(preview: TrainPreview): { label: string; value: unknown }[] {
+  return [
+    { label: "final_market", value: preview.final_market },
+    { label: "train_window", value: preview.train_window },
+    { label: "config_source", value: preview.config_source ?? preview.config_override },
+    { label: "estimated_outputs", value: preview.estimated_outputs ?? preview.output_path },
+    { label: "effective_params", value: preview.effective_params },
+  ];
+}
+
+function importanceEntries(importance: Record<string, unknown>): [string, number][] {
+  const raw = Array.isArray(importance.importance) ? importance.importance : null;
+  if (raw) {
+    return raw
+      .map((item) => {
+        if (!item || typeof item !== "object") return null;
+        const record = item as Record<string, unknown>;
+        const feature = record.feature ?? record.name;
+        const value = record.importance ?? record.gain ?? record.value;
+        if (typeof feature !== "string" || typeof value !== "number") return null;
+        return [feature, value] as [string, number];
+      })
+      .filter((item): item is [string, number] => item !== null);
+  }
+  return Object.entries(importance)
+    .filter(([, value]) => typeof value === "number")
+    .map(([key, value]) => [key, Number(value)]);
+}
+
 function TrainActionCard({
   registry,
   onTriggered,
@@ -139,6 +224,14 @@ function TrainActionCard({
   const [trainStartDate, setTrainStartDate] = useState("");
   const [trainEndDate, setTrainEndDate] = useState("");
   const [configOverride, setConfigOverride] = useState("");
+  const [trainingMode, setTrainingMode] = useState("custom");
+  const [factorNames, setFactorNames] = useState("");
+  const [withSector, setWithSector] = useState(false);
+  const [noExtraFactors, setNoExtraFactors] = useState(false);
+  const [skipFactorPipeline, setSkipFactorPipeline] = useState(false);
+  const [ensembleSeeds, setEnsembleSeeds] = useState("");
+  const [baggingFraction, setBaggingFraction] = useState("");
+  const [lgbmParams, setLgbmParams] = useState("");
   const [dryRun, setDryRun] = useState(true);
   const [preview, setPreview] = useState<TrainPreview | null>(null);
   const [taskId, setTaskId] = useState<string | null>(null);
@@ -154,6 +247,7 @@ function TrainActionCard({
     value: model.name,
     label: model.name,
   })) ?? [{ value: modelType, label: modelType }];
+  const factorOptionsText = registry?.factors.slice(0, 10).map((factor) => factor.name).join(", ");
 
   const finalMarket = preview?.final_market ? String(preview.final_market) : "";
   const marketMismatch = Boolean(finalMarket && finalMarket !== market);
@@ -169,6 +263,14 @@ function TrainActionCard({
         train_start_date: trainStartDate || null,
         train_end_date: trainEndDate || null,
         config_override: configOverride.trim() || null,
+        factors: parseCsvList(factorNames),
+        qlib_native: trainingMode === "qlib_native",
+        with_sector: withSector,
+        no_extra_factors: noExtraFactors,
+        skip_factor_pipeline: skipFactorPipeline,
+        ensemble_seeds: parseSeeds(ensembleSeeds),
+        bagging_fraction: parseOptionalNumber(baggingFraction),
+        lgbm_params: parseJsonObject(lgbmParams),
         dry_run: dryRun,
       });
       const result = await triggerTrain(params);
@@ -216,12 +318,64 @@ function TrainActionCard({
             />
           </div>
           <div>
+            <FieldLabel>{t("console.models.train.trainingMode")}</FieldLabel>
+            <Select
+              options={[
+                { value: "custom", label: t("console.models.train.customMode") },
+                { value: "qlib_native", label: t("console.models.train.qlibNativeMode") },
+              ]}
+              value={trainingMode}
+              onChange={setTrainingMode}
+            />
+          </div>
+          <div>
             <FieldLabel>{t("console.models.train.startDate")}</FieldLabel>
             <DatePicker value={trainStartDate} onChange={setTrainStartDate} />
           </div>
           <div>
             <FieldLabel>{t("console.models.train.endDate")}</FieldLabel>
             <DatePicker value={trainEndDate} onChange={setTrainEndDate} />
+          </div>
+        </div>
+
+        <div className="grid gap-4 rounded-sm border border-terminal-border bg-terminal-raised p-4 md:grid-cols-2">
+          <div className="md:col-span-2">
+            <div className="mb-3 flex items-center gap-2 font-mono text-[10px] uppercase tracking-wider text-terminal-text-dim">
+              <SlidersHorizontal className="h-3.5 w-3.5" />
+              {t("console.models.train.researchConfig")}
+            </div>
+            <FieldLabel>{t("console.models.train.factorNames")}</FieldLabel>
+            <TextInput
+              value={factorNames}
+              onChange={setFactorNames}
+              placeholder={factorOptionsText || "northbound, sector"}
+            />
+          </div>
+          <Toggle checked={withSector} onChange={setWithSector}>
+            {t("console.models.train.withSector")}
+          </Toggle>
+          <Toggle checked={noExtraFactors} onChange={setNoExtraFactors}>
+            {t("console.models.train.noExtraFactors")}
+          </Toggle>
+          <Toggle checked={skipFactorPipeline} onChange={setSkipFactorPipeline}>
+            {t("console.models.train.skipFactorPipeline")}
+          </Toggle>
+          <div>
+            <FieldLabel>{t("console.models.train.ensembleSeeds")}</FieldLabel>
+            <TextInput value={ensembleSeeds} onChange={setEnsembleSeeds} placeholder="42, 123, 2024" />
+          </div>
+          <div>
+            <FieldLabel>{t("console.models.train.baggingFraction")}</FieldLabel>
+            <TextInput value={baggingFraction} onChange={setBaggingFraction} placeholder="0.8" />
+          </div>
+          <div className="md:col-span-2">
+            <FieldLabel>{t("console.models.train.lgbmParams")}</FieldLabel>
+            <TextArea
+              value={lgbmParams}
+              onChange={setLgbmParams}
+              rows={5}
+              placeholder={'{"learning_rate": 0.03, "num_leaves": 64, "n_estimators": 1200}'}
+            />
           </div>
         </div>
 
@@ -280,6 +434,18 @@ function TrainActionCard({
                 </span>
               </div>
             )}
+            <div className="grid gap-2 md:grid-cols-2">
+              {previewItems(preview).map((item) => (
+                <div key={item.label} className="rounded-sm border border-terminal-border bg-terminal-surface px-3 py-2">
+                  <p className="font-mono text-[10px] uppercase tracking-wider text-terminal-text-dim">
+                    {item.label}
+                  </p>
+                  <p className="break-words font-mono text-xs text-terminal-text-bright">
+                    {valueText(item.value)}
+                  </p>
+                </div>
+              ))}
+            </div>
             <PreviewJson value={preview} />
           </div>
         )}
@@ -491,6 +657,7 @@ function HistoryTab({
               { key: "model_type", label: t("console.models.modelType"), sortable: true },
               { key: "tag", label: t("console.models.tag"), sortable: true },
               { key: "market", label: t("console.models.market"), sortable: true },
+              { key: "result_paths", label: t("console.models.history.outputs") },
               { key: "size_mb", label: t("console.models.sizeMb"), sortable: true, align: "right" },
               {
                 key: "modified",
@@ -551,11 +718,19 @@ function InspectTab({
     value: model.filename,
     label: `${model.filename} (${model.size_mb} MB)`,
   }));
+  const selectedInfo = models.find((model) => model.filename === selected);
+  const lineageItems = [
+    ["model", meta?.model ?? meta?.model_type ?? selectedInfo?.meta?.model],
+    ["tag", meta?.tag ?? selectedInfo?.meta?.tag],
+    ["safe_tag", meta?.safe_tag],
+    ["ts", meta?.ts ?? selectedInfo?.modified],
+    ["recorder_id", meta?.recorder_id],
+    ["result_paths", selectedInfo?.result_paths],
+  ].filter(([, value]) => value !== undefined && value !== null && value !== "");
 
   const importanceChartOption = useMemo(() => {
     if (!importance) return null;
-    const entries = Object.entries(importance)
-      .filter(([, value]) => typeof value === "number")
+    const entries = importanceEntries(importance)
       .sort(([, a], [, b]) => Number(b) - Number(a))
       .slice(0, 20);
     if (entries.length === 0) return null;
@@ -601,22 +776,39 @@ function InspectTab({
       </Card>
 
       <div className="grid gap-6 xl:grid-cols-[1fr_0.8fr]">
-        <Card title={t("console.models.inspect.meta")}>
-          {detailLoading ? (
-            <SkeletonTable rows={4} />
-          ) : meta && Object.keys(meta).length > 0 ? (
-            <div className="grid gap-2 md:grid-cols-2">
-              {Object.entries(meta).map(([key, value]) => (
-                <div key={key} className="rounded-sm border border-terminal-border bg-terminal-raised px-3 py-2">
-                  <p className="font-mono text-[10px] uppercase tracking-wider text-terminal-text-dim">{key}</p>
-                  <p className="truncate font-mono text-xs text-terminal-text-bright">{valueText(value)}</p>
-                </div>
-              ))}
-            </div>
-          ) : (
-            <p className="font-mono text-xs text-terminal-text-dim">{t("console.models.inspect.noMeta")}</p>
-          )}
-        </Card>
+        <div className="space-y-6">
+          <Card title={t("console.models.inspect.meta")}>
+            {detailLoading ? (
+              <SkeletonTable rows={4} />
+            ) : meta && Object.keys(meta).length > 0 ? (
+              <div className="grid gap-2 md:grid-cols-2">
+                {Object.entries(meta).map(([key, value]) => (
+                  <div key={key} className="rounded-sm border border-terminal-border bg-terminal-raised px-3 py-2">
+                    <p className="font-mono text-[10px] uppercase tracking-wider text-terminal-text-dim">{key}</p>
+                    <p className="break-words font-mono text-xs text-terminal-text-bright">{valueText(value)}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="font-mono text-xs text-terminal-text-dim">{t("console.models.inspect.noMeta")}</p>
+            )}
+          </Card>
+
+          <Card title={t("console.models.inspect.lineage")}>
+            {lineageItems.length > 0 ? (
+              <div className="grid gap-2 md:grid-cols-2">
+                {lineageItems.map(([key, value]) => (
+                  <div key={String(key)} className="rounded-sm border border-terminal-border bg-terminal-raised px-3 py-2">
+                    <p className="font-mono text-[10px] uppercase tracking-wider text-terminal-text-dim">{String(key)}</p>
+                    <p className="break-words font-mono text-xs text-terminal-text-bright">{valueText(value)}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="font-mono text-xs text-terminal-text-dim">{t("console.models.inspect.noLineage")}</p>
+            )}
+          </Card>
+        </div>
 
         <Card title={t("console.models.inspect.registry")}>
           {registry ? (

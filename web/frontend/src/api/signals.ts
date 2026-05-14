@@ -1,7 +1,9 @@
 import type { TaskTrigger } from "./tasks";
+import { RebalanceCacheListSchema } from "../schemas/signals";
 import type {
   GenerateParams,
   NotifyTestParams,
+  RebalanceCache,
   RebalanceParams,
 } from "../schemas/signals";
 
@@ -66,7 +68,11 @@ export async function fetchSignalContent(filename: string): Promise<SignalConten
   return request(`/history/${encodeURIComponent(filename)}`);
 }
 
+export async function fetchRebalanceHistory(): Promise<RebalanceCache[]> {
+  const response = await request<unknown>("/rebalance-history");
+  return RebalanceCacheListSchema.parse(response);
+}
+
 export async function fetchRegime(): Promise<RegimeInfo> {
   return request("/regime");
 }
-

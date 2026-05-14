@@ -11,8 +11,10 @@ import { Select } from "../components/ui/Select";
 import { NumberInput } from "../components/ui/NumberInput";
 import { DatePicker } from "../components/ui/DatePicker";
 import { Skeleton } from "../components/ui/Skeleton";
+import { EChartsWrapper } from "../components/ui/EChartsWrapper";
 import { get } from "../api/client";
 import {
+  fetchRebalanceHistory,
   fetchRegime,
   fetchSignalContent,
   fetchSignalHistory,
@@ -31,6 +33,7 @@ import {
 import type {
   GenerateParams,
   NotifyTestParams,
+  RebalanceCache,
   RebalanceParams,
 } from "../schemas/signals";
 import { useTaskTracking } from "../hooks/useTaskTracking";
@@ -215,6 +218,24 @@ function arraySize(value: unknown) {
 
 function formatValue(value: unknown) {
   return typeof value === "number" ? value.toFixed(2) : String(value ?? "-");
+}
+
+function formatMoney(value: number | null | undefined) {
+  if (typeof value !== "number" || Number.isNaN(value)) return "-";
+  return value.toLocaleString(undefined, { maximumFractionDigits: 0 });
+}
+
+function formatPercent(value: number | null | undefined) {
+  if (typeof value !== "number" || Number.isNaN(value)) return "-";
+  return `${(value * 100).toFixed(1)}%`;
+}
+
+function cacheDate(cache: RebalanceCache) {
+  return cache.trade_date || cache.created_at || cache.modified;
+}
+
+function matchesResultPath(task: TaskState, cache: RebalanceCache) {
+  return task.result_paths?.some((path) => path === cache.path || path.endsWith(`/${cache.filename}`));
 }
 
 function useModels() {
@@ -531,12 +552,18 @@ function NotifyTestAction() {
 function HistoryTab() {
   const { t } = useTranslation();
   const [files, setFiles] = useState<SignalFile[]>([]);
+  const [caches, setCaches] = useState<RebalanceCache[]>([]);
+  const [loadingCaches, setLoadingCaches] = useState(true);
   const { tasks, refresh } = useTaskTracking({ pageKey: "signals", taskTypeFilter: TASK_TYPES });
 
   useEffect(() => {
     fetchSignalHistory()
       .then(setFiles)
       .catch(() => setFiles([]));
+    fetchRebalanceHistory()
+      .then(setCaches)
+      .catch(() => setCaches([]))
+      .finally(() => setLoadingCaches(false));
   }, []);
 
   return (
@@ -581,6 +608,7 @@ function HistoryTab() {
           </table>
         </div>
       </Card>
+      <RebalanceCacheHistory caches={caches} tasks={tasks} loading={loadingCaches} />
       <SignalFileList files={files} />
     </div>
   );
@@ -616,6 +644,201 @@ function SignalFileList({ files }: { files: SignalFile[] }) {
         </div>
       )}
     </Card>
+  );
+}
+
+function RebalanceCacheHistory({
+  caches,
+  tasks,
+  loading,
+}: {
+  caches: RebalanceCache[];
+  tasks: TaskState[];
+  loading: boolean;
+}) {
+  const { t } = useTranslation();
+  const latest = caches[0];
+
+  return (
+    <Card title={t("console.signals.history.rebalanceCaches")} accent="amber">
+      {loading ? (
+        <Skeleton className="h-56 w-full" />
+      ) : caches.length === 0 ? (
+        <p className="text-xs font-mono text-terminal-text-dim">
+          {t("console.signals.history.noRebalanceCaches")}
+        </p>
+      ) : (
+        <div className="space-y-4">
+          <RebalanceCharts caches={caches} />
+          {latest && <TopHoldingsPanel cache={latest} />}
+          <div className="overflow-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="text-terminal-text-dim">
+                <tr>
+                  <th className="px-2 py-2">{t("console.signals.history.tradeDate")}</th>
+                  <th className="px-2 py-2">{t("console.signals.history.strategy")}</th>
+                  <th className="px-2 py-2">{t("console.signals.history.portfolioValue")}</th>
+                  <th className="px-2 py-2">{t("console.signals.history.targetValue")}</th>
+                  <th className="px-2 py-2">{t("console.signals.history.holdings")}</th>
+                  <th className="px-2 py-2">{t("console.signals.history.actions")}</th>
+                  <th className="px-2 py-2">{t("console.signals.history.linkedTask")}</th>
+                </tr>
+              </thead>
+              <tbody>
+                {caches.map((cache) => {
+                  const linkedTask = tasks.find((task) => matchesResultPath(task, cache));
+                  return (
+                    <tr key={cache.filename} className="border-t border-terminal-border-dim">
+                      <td className="px-2 py-2 font-mono text-terminal-green">
+                        {cache.trade_date ?? cache.filename}
+                        {cache.mock && <span className="ml-2 text-terminal-text-dim">MOCK</span>}
+                      </td>
+                      <td className="px-2 py-2 font-mono text-terminal-text-dim">
+                        {String(cache.strategy.market ?? "-")} / topk={String(cache.strategy.topk ?? "-")}
+                      </td>
+                      <td className="px-2 py-2 font-mono">{formatMoney(cache.portfolio_value)}</td>
+                      <td className="px-2 py-2 font-mono">{formatMoney(cache.target_value)}</td>
+                      <td className="px-2 py-2 font-mono">{cache.holdings_count}</td>
+                      <td className="px-2 py-2 font-mono text-terminal-text-dim">
+                        B {cache.action_summary.buy_count} / {formatMoney(cache.action_summary.buy_amount)}
+                        <span className="mx-1">|</span>
+                        S {cache.action_summary.sell_count} / {formatMoney(cache.action_summary.sell_amount)}
+                      </td>
+                      <td className="px-2 py-2">
+                        {linkedTask ? <TaskChip task={linkedTask} /> : <span className="text-terminal-text-dim">-</span>}
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+}
+
+function RebalanceCharts({ caches }: { caches: RebalanceCache[] }) {
+  const { t } = useTranslation();
+  const chronological = useMemo(
+    () => [...caches].sort((a, b) => cacheDate(a).localeCompare(cacheDate(b))),
+    [caches],
+  );
+  const dates = chronological.map((cache) => cache.trade_date ?? cache.filename.replace("rebalance_", "").replace(".json", ""));
+
+  const valueOption = useMemo<Record<string, unknown>>(
+    () => ({
+      backgroundColor: "transparent",
+      color: ["#4ade80", "#38bdf8"],
+      tooltip: { trigger: "axis" },
+      legend: { textStyle: { color: "#94a3b8" } },
+      grid: { left: 48, right: 16, top: 32, bottom: 28 },
+      xAxis: { type: "category", data: dates, axisLabel: { color: "#94a3b8" } },
+      yAxis: { type: "value", axisLabel: { color: "#94a3b8" }, splitLine: { lineStyle: { color: "#1f2937" } } },
+      series: [
+        {
+          name: t("console.signals.history.portfolioValue"),
+          type: "line",
+          smooth: true,
+          data: chronological.map((cache) => cache.portfolio_value),
+        },
+        {
+          name: t("console.signals.history.targetValue"),
+          type: "line",
+          smooth: true,
+          data: chronological.map((cache) => cache.target_value),
+        },
+      ],
+    }),
+    [chronological, dates, t],
+  );
+
+  const activityOption = useMemo<Record<string, unknown>>(
+    () => ({
+      backgroundColor: "transparent",
+      color: ["#f59e0b", "#ef4444", "#a78bfa"],
+      tooltip: { trigger: "axis" },
+      legend: { textStyle: { color: "#94a3b8" } },
+      grid: { left: 48, right: 16, top: 32, bottom: 28 },
+      xAxis: { type: "category", data: dates, axisLabel: { color: "#94a3b8" } },
+      yAxis: { type: "value", axisLabel: { color: "#94a3b8" }, splitLine: { lineStyle: { color: "#1f2937" } } },
+      series: [
+        {
+          name: t("console.signals.history.holdings"),
+          type: "line",
+          smooth: true,
+          data: chronological.map((cache) => cache.holdings_count),
+        },
+        {
+          name: t("console.signals.history.buyAmount"),
+          type: "bar",
+          data: chronological.map((cache) => cache.action_summary.buy_amount),
+        },
+        {
+          name: t("console.signals.history.sellAmount"),
+          type: "bar",
+          data: chronological.map((cache) => cache.action_summary.sell_amount),
+        },
+      ],
+    }),
+    [chronological, dates, t],
+  );
+
+  return (
+    <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+      <div className="rounded-sm border border-terminal-border-dim p-3">
+        <EChartsWrapper option={valueOption} height={280} />
+      </div>
+      <div className="rounded-sm border border-terminal-border-dim p-3">
+        <EChartsWrapper option={activityOption} height={280} />
+      </div>
+    </div>
+  );
+}
+
+function TopHoldingsPanel({ cache }: { cache: RebalanceCache }) {
+  const { t } = useTranslation();
+  if (cache.top_holdings.length === 0) {
+    return (
+      <p className="text-xs font-mono text-terminal-text-dim">
+        {t("console.signals.history.noHoldings")}
+      </p>
+    );
+  }
+  return (
+    <div className="grid grid-cols-1 gap-3 lg:grid-cols-2">
+      <div className="rounded-sm border border-terminal-border-dim p-3">
+        <p className="mb-3 text-xs font-mono uppercase text-terminal-text-dim">
+          {t("console.signals.history.topHoldings")} ({cache.trade_date ?? cache.filename})
+        </p>
+        <div className="space-y-2">
+          {cache.top_holdings.map((holding) => (
+            <div key={holding.instrument} className="grid grid-cols-[110px_1fr_70px] items-center gap-2 text-xs">
+              <span className="font-mono text-terminal-green">{holding.instrument}</span>
+              <div className="h-2 overflow-hidden rounded-sm bg-terminal-border-dim">
+                <div
+                  className="h-full bg-terminal-green"
+                  style={{ width: `${Math.max(2, (holding.weight ?? 0) * 100)}%` }}
+                />
+              </div>
+              <span className="text-right font-mono text-terminal-text-dim">{formatPercent(holding.weight)}</span>
+            </div>
+          ))}
+        </div>
+      </div>
+      <div className="rounded-sm border border-terminal-border-dim p-3">
+        <p className="mb-3 text-xs font-mono uppercase text-terminal-text-dim">
+          {t("console.signals.history.actionSummary")}
+        </p>
+        <div className="grid grid-cols-2 gap-2">
+          <Metric label={t("console.signals.history.buyAmount")} value={formatMoney(cache.action_summary.buy_amount)} />
+          <Metric label={t("console.signals.history.sellAmount")} value={formatMoney(cache.action_summary.sell_amount)} />
+          <Metric label={t("console.signals.history.buyCount")} value={cache.action_summary.buy_count} />
+          <Metric label={t("console.signals.history.sellCount")} value={cache.action_summary.sell_count} />
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -707,11 +930,15 @@ function SignalFileInspector() {
 function OverviewTab() {
   const { t } = useTranslation();
   const [files, setFiles] = useState<SignalFile[]>([]);
+  const [caches, setCaches] = useState<RebalanceCache[]>([]);
 
   useEffect(() => {
     fetchSignalHistory()
       .then(setFiles)
       .catch(() => setFiles([]));
+    fetchRebalanceHistory()
+      .then(setCaches)
+      .catch(() => setCaches([]));
   }, []);
 
   const recentCount = useMemo(() => {
@@ -719,13 +946,23 @@ function OverviewTab() {
     return files.filter((file) => new Date(file.modified).getTime() >= cutoff).length;
   }, [files]);
 
+  const latestCache = caches[0];
+
   return (
-    <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+    <div className="grid grid-cols-1 gap-4 xl:grid-cols-4">
       <Card title={t("console.signals.overview.recentSignals")} accent="green">
         <p className="font-mono text-3xl text-terminal-text-bright">{recentCount}</p>
       </Card>
       <Card title={t("console.signals.overview.totalFiles")}>
         <p className="font-mono text-3xl text-terminal-text-bright">{files.length}</p>
+      </Card>
+      <Card title={t("console.signals.overview.rebalanceCaches")} accent="amber">
+        <p className="font-mono text-3xl text-terminal-text-bright">{caches.length}</p>
+      </Card>
+      <Card title={t("console.signals.overview.latestTargetValue")}>
+        <p className="font-mono text-3xl text-terminal-text-bright">
+          {formatMoney(latestCache?.target_value ?? latestCache?.portfolio_value)}
+        </p>
       </Card>
       <RegimeCard />
     </div>

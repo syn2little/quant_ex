@@ -37,6 +37,10 @@ function formatNumber(value: number | undefined, digits = 3) {
   return value == null ? "-" : value.toFixed(digits);
 }
 
+function formatPercent(value: number | undefined, digits = 2) {
+  return value == null ? "-" : `${(value * 100).toFixed(digits)}%`;
+}
+
 export function CompareConsole() {
   const { t } = useTranslation();
   const [results, setResults] = useState<BacktestResultFile[]>([]);
@@ -101,7 +105,7 @@ export function CompareConsole() {
       },
       yAxis: { type: "value", splitLine: { lineStyle: { color: "#1e1e22" } } },
       dataZoom: CHART_DATA_ZOOM,
-      series: runs.map((run) => ({
+      series: runs.filter((run) => run.equity_curve?.dates?.length).map((run) => ({
         name: run.label,
         type: "line",
         data: run.equity_curve.portfolio,
@@ -109,6 +113,31 @@ export function CompareConsole() {
         symbol: "none",
       })),
       title: { text: t("console.backtest.equityComparison"), textStyle: { color: "#c8ccd0", fontSize: 13 } },
+    };
+  }, [runs, t]);
+
+  const excessOption = useMemo(() => {
+    const runWithDates = runs.find((run) => run.equity_curve?.dates?.length);
+    if (!runWithDates) return null;
+    return {
+      tooltip: { trigger: "axis" },
+      legend: { data: runs.map((run) => run.label), textStyle: { color: "#c8ccd0", fontSize: 11 } },
+      grid: { left: 60, right: 20, top: 40, bottom: 60 },
+      xAxis: {
+        type: "category",
+        data: runWithDates.equity_curve.dates,
+        axisLabel: { color: "#71717a", fontSize: 10, rotate: 30 },
+      },
+      yAxis: { type: "value", splitLine: { lineStyle: { color: "#1e1e22" } } },
+      dataZoom: CHART_DATA_ZOOM,
+      series: runs.filter((run) => run.equity_curve?.dates?.length).map((run) => ({
+        name: run.label,
+        type: "line",
+        data: run.equity_curve.excess,
+        lineStyle: { color: run.color, width: 1.8, type: "dashed" },
+        symbol: "none",
+      })),
+      title: { text: t("console.backtest.excessComparison"), textStyle: { color: "#c8ccd0", fontSize: 13 } },
     };
   }, [runs, t]);
 
@@ -130,7 +159,7 @@ export function CompareConsole() {
         axisLabel: { formatter: (value: number) => `${(value * 100).toFixed(1)}%` },
       },
       dataZoom: CHART_DATA_ZOOM,
-      series: runs.map((run) => ({
+      series: runs.filter((run) => run.drawdown?.dates?.length).map((run) => ({
         name: run.label,
         type: "line",
         data: run.drawdown.drawdown,
@@ -141,6 +170,18 @@ export function CompareConsole() {
       title: { text: t("console.backtest.drawdownComparison"), textStyle: { color: "#c8ccd0", fontSize: 13 } },
     };
   }, [runs, t]);
+
+  const sortedRuns = useMemo(
+    () =>
+      [...runs].sort((a, b) => {
+        const ai = metricValue(a.metrics, "information_ratio") ?? Number.NEGATIVE_INFINITY;
+        const bi = metricValue(b.metrics, "information_ratio") ?? Number.NEGATIVE_INFINITY;
+        return bi - ai;
+      }),
+    [runs],
+  );
+  const bestRun = sortedRuns[0];
+  const chartableCount = runs.filter((run) => run.equity_curve?.dates?.length).length;
 
   return (
     <Card title={t("console.backtest.compareTitle")}>
@@ -211,12 +252,51 @@ export function CompareConsole() {
         />
         {runs.length > 0 && (
           <>
-            <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
-              {equityOption && <EChartsWrapper option={equityOption} height={340} />}
-              {drawdownOption && <EChartsWrapper option={drawdownOption} height={340} />}
+            <div className="grid grid-cols-2 gap-3 md:grid-cols-4">
+              <div className="rounded-sm border border-terminal-border bg-terminal-raised px-3 py-2">
+                <p className="font-mono text-xs uppercase text-terminal-text-dim">{t("console.backtest.bestByIr")}</p>
+                <p className="truncate font-mono text-sm font-semibold text-terminal-green">
+                  {bestRun?.label ?? "-"}
+                </p>
+              </div>
+              <div className="rounded-sm border border-terminal-border bg-terminal-raised px-3 py-2">
+                <p className="font-mono text-xs uppercase text-terminal-text-dim">IR</p>
+                <p className="font-mono text-sm font-semibold text-terminal-green">
+                  {formatNumber(metricValue(bestRun?.metrics ?? {}, "information_ratio"), 4)}
+                </p>
+              </div>
+              <div className="rounded-sm border border-terminal-border bg-terminal-raised px-3 py-2">
+                <p className="font-mono text-xs uppercase text-terminal-text-dim">{t("console.backtest.chartableRuns")}</p>
+                <p className="font-mono text-sm font-semibold text-terminal-text-bright">
+                  {chartableCount} / {runs.length}
+                </p>
+              </div>
+              <div className="rounded-sm border border-terminal-border bg-terminal-raised px-3 py-2">
+                <p className="font-mono text-xs uppercase text-terminal-text-dim">{t("console.backtest.rankMetricLocked")}</p>
+                <p className="font-mono text-sm font-semibold text-terminal-text-bright">information_ratio</p>
+              </div>
+            </div>
+            {chartableCount > 0 ? (
+              <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+                {equityOption && <EChartsWrapper option={equityOption} height={320} />}
+                {excessOption && <EChartsWrapper option={excessOption} height={320} />}
+                {drawdownOption && <EChartsWrapper option={drawdownOption} height={320} />}
+              </div>
+            ) : (
+              <div className="rounded-sm border border-dashed border-terminal-border bg-terminal-surface px-6 py-10 text-center">
+                <p className="font-mono text-sm font-semibold text-terminal-text">
+                  {t("console.backtest.compareSummaryOnlyTitle")}
+                </p>
+                <p className="mt-2 font-mono text-xs text-terminal-text-dim">
+                  {t("console.backtest.compareSummaryOnlyDescription")}
+                </p>
+              </div>
+            )}
+            <div className="rounded-sm border border-terminal-border bg-terminal-raised/40 px-3 py-2 font-mono text-xs text-terminal-text-dim">
+              {t("console.backtest.historyIrNote")}
             </div>
             <Table
-              data={runs as unknown as Record<string, unknown>[]}
+              data={sortedRuns as unknown as Record<string, unknown>[]}
               pageSize={5}
               columns={[
                 {
@@ -238,21 +318,50 @@ export function CompareConsole() {
                 {
                   key: "information_ratio",
                   label: "IR",
+                  align: "right",
                   render: (row) =>
-                    formatNumber(metricValue((row as unknown as CompareRun).metrics, "information_ratio")),
+                    formatNumber(metricValue((row as unknown as CompareRun).metrics, "information_ratio"), 4),
                 },
                 {
                   key: "sharpe",
                   label: "Sharpe",
+                  align: "right",
                   render: (row) => formatNumber(metricValue((row as unknown as CompareRun).metrics, "sharpe")),
+                },
+                {
+                  key: "annual_return",
+                  label: t("console.backtest.annualReturn"),
+                  align: "right",
+                  render: (row) =>
+                    formatPercent(metricValue((row as unknown as CompareRun).metrics, "annual_return")),
+                },
+                {
+                  key: "excess_annual_return",
+                  label: t("console.backtest.excessAnnualReturn"),
+                  align: "right",
+                  render: (row) =>
+                    formatPercent(metricValue((row as unknown as CompareRun).metrics, "excess_annual_return")),
                 },
                 {
                   key: "max_drawdown",
                   label: "Max DD",
+                  align: "right",
                   render: (row) => {
                     const value = metricValue((row as unknown as CompareRun).metrics, "max_drawdown");
-                    return value == null ? "-" : `${(value * 100).toFixed(2)}%`;
+                    return formatPercent(value);
                   },
+                },
+                {
+                  key: "calmar",
+                  label: "Calmar",
+                  align: "right",
+                  render: (row) => formatNumber(metricValue((row as unknown as CompareRun).metrics, "calmar")),
+                },
+                {
+                  key: "turnover",
+                  label: "Turnover",
+                  align: "right",
+                  render: (row) => formatPercent(metricValue((row as unknown as CompareRun).metrics, "turnover"), 1),
                 },
               ]}
             />

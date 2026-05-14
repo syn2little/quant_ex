@@ -24,6 +24,11 @@ export type BacktestPreview = {
   [key: string]: unknown;
 };
 
+export type BacktestResultTable = {
+  columns: string[];
+  rows: Record<string, unknown>[];
+};
+
 async function request<T>(path: string, options?: RequestInit): Promise<T> {
   const response = await fetch(path, {
     headers: { "Content-Type": "application/json", ...options?.headers },
@@ -59,6 +64,10 @@ export function fetchResultMetrics(filename: string): Promise<BacktestMetrics & 
   );
 }
 
+export function fetchResultTable(filename: string): Promise<BacktestResultTable> {
+  return request<BacktestResultTable>(`/api/backtest/results/${encodeURIComponent(filename)}`);
+}
+
 export function fetchResultEquityCurve(filename: string): Promise<EquityCurve> {
   return request<EquityCurve>(
     `/api/backtest/results/${encodeURIComponent(filename)}/equity-curve`,
@@ -76,8 +85,8 @@ export async function fetchCompareRuns(filenames: string[]): Promise<CompareRun[
   const runs = await Promise.all(
     filenames.map(async (filename, index) => {
       const [equity_curve, drawdown, metrics] = await Promise.all([
-        fetchResultEquityCurve(filename),
-        fetchResultDrawdown(filename),
+        fetchResultEquityCurve(filename).catch(() => ({ dates: [], portfolio: [], benchmark: [], excess: [] })),
+        fetchResultDrawdown(filename).catch(() => ({ dates: [], drawdown: [] })),
         fetchResultMetrics(filename).catch(() => ({} as BacktestMetrics)),
       ]);
       return {

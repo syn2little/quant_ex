@@ -24,7 +24,7 @@ const MARKET_OPTIONS = [
 
 const DEAL_PRICE_OPTIONS = [
   { value: "close", label: "close" },
-  { value: "vwap", label: "vwap" },
+  { value: "open", label: "open" },
 ];
 
 const DEFAULT_GRID: GridParams = {

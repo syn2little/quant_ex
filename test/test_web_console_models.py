@@ -44,3 +44,6 @@ def test_models_train_dry_run_preview_includes_final_market():
     assert r.status_code == 200
     body = r.json()
     assert body["preview"]["final_market"] == "csi1000"
+    assert body["preview"]["config_source"]["type"] == "default"
+    assert "estimated_outputs" in body["preview"]
+    assert "effective_params" in body["preview"]

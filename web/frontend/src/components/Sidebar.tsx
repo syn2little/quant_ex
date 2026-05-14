@@ -1,4 +1,3 @@
-import { useState } from "react";
 import { NavLink } from "react-router-dom";
 import { useTranslation } from "react-i18next";
 import { LanguageToggle } from "./LanguageToggle";
@@ -30,36 +29,28 @@ const NAV_ITEMS = [
 
 export function Sidebar() {
   const { t } = useTranslation();
-  const [expanded, setExpanded] = useState(false);
 
   return (
-    <motion.aside
-      onMouseEnter={() => setExpanded(true)}
-      onMouseLeave={() => setExpanded(false)}
-      animate={{ width: expanded ? 200 : 52 }}
-      transition={{ duration: 0.15, ease: "easeOut" }}
-      className="h-screen sticky top-0 flex flex-col bg-terminal-bg border-r border-terminal-border-dim z-40 overflow-hidden"
+    <aside
+      className="sticky top-0 z-40 flex h-screen w-[224px] shrink-0 flex-col overflow-hidden border-r border-[#20342c] bg-[#111d18] text-[#d7e3dc]"
     >
       {/* Logo */}
-      <div className="flex items-center gap-2 px-3 py-3 border-b border-terminal-border-dim h-12">
-        <span className="text-sm font-mono font-bold text-terminal-green tracking-tight shrink-0">
+      <div className="flex h-14 items-center gap-3 border-b border-[#20342c] px-4">
+        <span className="grid h-8 w-8 shrink-0 place-items-center border border-terminal-green/40 bg-terminal-green-glow text-sm font-mono font-bold tracking-tight text-[#75d9ad]">
           QX
         </span>
-        {expanded && (
-          <motion.span
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            transition={{ duration: 0.1 }}
-            className="text-xs font-mono text-terminal-text-dim whitespace-nowrap"
-          >
+        <div className="min-w-0">
+          <div className="whitespace-nowrap text-sm font-semibold tracking-wide text-[#f3f7f4]">
             quant_ex
-          </motion.span>
-        )}
+          </div>
+          <div className="font-mono text-[10px] uppercase tracking-[0.14em] text-[#8ca59a]">
+            research console
+          </div>
+        </div>
       </div>
 
       {/* Nav */}
-      <nav className="flex-1 py-1.5 space-y-0.5 overflow-y-auto overflow-x-hidden">
+      <nav className="flex-1 space-y-1 overflow-y-auto overflow-x-hidden px-2 py-3">
         {NAV_ITEMS.map((item) => (
           <NavLink
             key={item.to}
@@ -67,10 +58,10 @@ export function Sidebar() {
             end={item.to === "/"}
             className={({ isActive }) =>
               clsx(
-                "flex items-center gap-2.5 mx-1.5 px-2.5 py-2 rounded-sm text-xs font-mono transition-colors relative",
+                "relative flex items-center gap-3 px-3 py-2.5 text-xs font-mono transition-colors",
                 isActive
-                  ? "text-terminal-green bg-terminal-green-glow"
-                  : "text-terminal-text-dim hover:text-terminal-text hover:bg-terminal-raised"
+                  ? "bg-[#1b3028] text-[#78ddb0]"
+                  : "text-[#9eb0a7] hover:bg-[#172720] hover:text-[#eef6f1]"
               )
             }
           >
@@ -83,17 +74,8 @@ export function Sidebar() {
                     transition={{ type: "spring", stiffness: 500, damping: 35 }}
                   />
                 )}
-                <item.icon size={15} className="shrink-0" />
-                {expanded && (
-                  <motion.span
-                    initial={{ opacity: 0 }}
-                    animate={{ opacity: 1 }}
-                    transition={{ duration: 0.1 }}
-                    className="whitespace-nowrap"
-                  >
-                    {t(`nav.${item.key}`)}
-                  </motion.span>
-                )}
+                <item.icon size={16} className="shrink-0" />
+                <span className="whitespace-nowrap">{t(`nav.${item.key}`)}</span>
               </>
             )}
           </NavLink>
@@ -102,6 +84,6 @@ export function Sidebar() {
 
       {/* Language */}
       <LanguageToggle />
-    </motion.aside>
+    </aside>
   );
 }
