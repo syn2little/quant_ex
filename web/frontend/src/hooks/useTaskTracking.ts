@@ -1,9 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { listTasks, subscribeTask } from "../api/tasks";
 import type { TaskState } from "../api/types";
+import type { PageKey } from "../components/console/ConsolePageLayout";
 
 export type UseTaskTrackingOptions = {
-  pageKey: string;
+  pageKey: PageKey;
   taskTypeFilter: string[];
   pollMs?: number;
 };

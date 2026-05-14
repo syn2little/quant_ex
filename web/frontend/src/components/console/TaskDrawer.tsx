@@ -1,26 +1,39 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Copy, X } from "lucide-react";
 import { cancelTask, subscribeTask } from "../../api/tasks";
 import { useTaskTracking } from "../../hooks/useTaskTracking";
 import type { TaskState, TaskStatus } from "../../api/types";
+import type { PageKey } from "./ConsolePageLayout";
 import { TaskChip } from "./TaskChip";
 
 export type TaskDrawerProps = {
-  pageKey: string;
+  pageKey: PageKey;
   taskTypeFilter: string[];
   open: boolean;
   onClose: () => void;
 };
 
+const ACTIVE_STATUSES = new Set<TaskStatus>(["pending", "running"]);
+const TERMINAL_STATUSES = new Set<TaskStatus>(["done", "failed", "cancelled"]);
+
 export function TaskDrawer({ pageKey, taskTypeFilter, open, onClose }: TaskDrawerProps) {
   const { t } = useTranslation();
-  const { tasks, refresh } = useTaskTracking({ pageKey, taskTypeFilter });
+  const { tasks, refresh, trackTask } = useTaskTracking({ pageKey, taskTypeFilter });
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [events, setEvents] = useState<Record<string, string[]>>({});
   const [statusFilter, setStatusFilter] = useState<"all" | TaskStatus>("all");
   const [actionFilter, setActionFilter] = useState("all");
   const [showFailureDetails, setShowFailureDetails] = useState(false);
+
+  const clearTaskEvents = useCallback((taskId: string) => {
+    setEvents((prev) => {
+      if (!prev[taskId]) return prev;
+      const next = { ...prev };
+      delete next[taskId];
+      return next;
+    });
+  }, []);
 
   const actions = useMemo(
     () => Array.from(new Set(tasks.map((task) => task.action_key ?? task.task_type))).sort(),
@@ -63,13 +76,25 @@ export function TaskDrawer({ pageKey, taskTypeFilter, open, onClose }: TaskDrawe
   }, [open, refresh]);
 
   useEffect(() => {
+    if (!open) return;
+    tasks.filter((task) => ACTIVE_STATUSES.has(task.status)).forEach((task) => {
+      trackTask(task.task_id);
+    });
+  }, [open, tasks, trackTask]);
+
+  useEffect(() => {
+    tasks.filter((task) => TERMINAL_STATUSES.has(task.status)).forEach((task) => {
+      clearTaskEvents(task.task_id);
+    });
+  }, [clearTaskEvents, tasks]);
+
+  useEffect(() => {
     setShowFailureDetails(false);
   }, [selectedTaskId]);
 
   useEffect(() => {
     if (!open || !selectedTask) return undefined;
-    const terminal = new Set(["done", "failed", "cancelled"]);
-    if (terminal.has(selectedTask.status)) return undefined;
+    if (TERMINAL_STATUSES.has(selectedTask.status)) return undefined;
 
     const source = subscribeTask(selectedTask.task_id, (event) => {
       setEvents((prev) => ({
@@ -78,7 +103,13 @@ export function TaskDrawer({ pageKey, taskTypeFilter, open, onClose }: TaskDrawe
       }));
       try {
         const payload = JSON.parse(event.data);
+        const status = payload?.status as TaskStatus | undefined;
+        if (status && TERMINAL_STATUSES.has(status)) {
+          clearTaskEvents(selectedTask.task_id);
+          source.close();
+        }
         if (payload?.type === "done" || payload?.type === "error") {
+          clearTaskEvents(selectedTask.task_id);
           refresh();
           source.close();
         }
@@ -88,7 +119,7 @@ export function TaskDrawer({ pageKey, taskTypeFilter, open, onClose }: TaskDrawe
     });
 
     return () => source.close();
-  }, [open, refresh, selectedTask]);
+  }, [clearTaskEvents, open, refresh, selectedTask]);
 
   function copyText(text: string) {
     if (!text) return;

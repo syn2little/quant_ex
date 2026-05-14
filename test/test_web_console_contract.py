@@ -44,6 +44,18 @@ def test_console_dialog_and_drawer_translate_labels_and_show_details():
     assert 't("console.tasks.events")' in drawer
 
 
+def test_task_drawer_tracks_active_tasks_and_cleans_terminal_events():
+    drawer = (FRONTEND_SRC / "components" / "console" / "TaskDrawer.tsx").read_text(encoding="utf-8")
+    hook = (FRONTEND_SRC / "hooks" / "useTaskTracking.ts").read_text(encoding="utf-8")
+
+    assert "pageKey: PageKey" in hook
+    assert "const { tasks, refresh, trackTask } = useTaskTracking" in drawer
+    assert "tasks.filter((task) => ACTIVE_STATUSES.has(task.status)).forEach" in drawer
+    assert "trackTask(task.task_id)" in drawer
+    assert "[open, tasks, trackTask]" in drawer
+    assert "delete next[taskId]" in drawer
+
+
 def test_execution_form_uses_typed_null_submit_skip_instead_of_string_sentinels():
     execution_form = (FRONTEND_SRC / "components" / "console" / "ExecutionForm.tsx").read_text(encoding="utf-8")
     console_index = (FRONTEND_SRC / "components" / "console" / "index.ts").read_text(encoding="utf-8")
