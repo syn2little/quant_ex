@@ -318,5 +318,37 @@
     "logFile": "File: {{file}}",
     "noLogs": "No log entries found",
     "noCache": "No cache data"
+  },
+  "console": {
+    "common": {
+      "dryRun": "Dry run",
+      "preview": "Preview",
+      "confirm": "Confirm",
+      "cancel": "Cancel",
+      "retry": "Retry",
+      "submit": "Submit",
+      "dryRunHint": "Defaults to dry-run preview. Uncheck and confirm to actually run.",
+      "destructiveWarning": "This action is destructive and cannot be undone."
+    },
+    "tasks": {
+      "drawerTitle": "Task drawer",
+      "empty": "No tasks yet.",
+      "statusPending": "pending",
+      "statusRunning": "running",
+      "statusDone": "done",
+      "statusFailed": "failed",
+      "statusCancelled": "cancelled",
+      "cancel": "Cancel"
+    },
+    "tabs": {
+      "overview": "Overview",
+      "execute": "Execute",
+      "history": "History",
+      "inspect": "Inspect"
+    },
+    "data": {},
+    "models": {},
+    "backtest": {},
+    "signals": {}
   }
 }

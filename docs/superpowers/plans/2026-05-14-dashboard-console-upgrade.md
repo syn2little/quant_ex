@@ -1408,7 +1408,7 @@ git commit -m "feat(web): add TaskDrawer + TaskChip + ConsolePageLayout + barrel
 - Modify: `web/frontend/src/i18n/en.json`
 - Modify: `web/frontend/src/i18n/zh.json`
 
-- [ ] **Step 1: 在 en.json 加 console.common + console.tasks + console.tabs**
+- [x] **Step 1: 在 en.json 加 console.common + console.tasks + console.tabs**
 
 ```json
 {
@@ -1449,7 +1449,7 @@ git commit -m "feat(web): add TaskDrawer + TaskChip + ConsolePageLayout + barrel
 
 (`data/models/backtest/signals` 空对象由 Phase 1 subagent 填充)
 
-- [ ] **Step 2: 在 zh.json 同步**
+- [x] **Step 2: 在 zh.json 同步**
 
 ```json
 {
@@ -1488,7 +1488,7 @@ git commit -m "feat(web): add TaskDrawer + TaskChip + ConsolePageLayout + barrel
 }
 ```
 
-- [ ] **Step 3: 校验 JSON 合法**
+- [x] **Step 3: 校验 JSON 合法**
 
 ```bash
 ./.venv/bin/python -c "import json; json.load(open('web/frontend/src/i18n/en.json')); json.load(open('web/frontend/src/i18n/zh.json')); print('OK')"
@@ -1496,7 +1496,7 @@ git commit -m "feat(web): add TaskDrawer + TaskChip + ConsolePageLayout + barrel
 
 Expected: `OK`
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add web/frontend/src/i18n/en.json web/frontend/src/i18n/zh.json

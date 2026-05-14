@@ -318,5 +318,37 @@
     "logFile": "文件: {{file}}",
     "noLogs": "未找到日志记录",
     "noCache": "无缓存数据"
+  },
+  "console": {
+    "common": {
+      "dryRun": "演练",
+      "preview": "预览",
+      "confirm": "确认",
+      "cancel": "取消",
+      "retry": "重试",
+      "submit": "提交",
+      "dryRunHint": "默认演练模式,取消勾选并确认后才会真实执行。",
+      "destructiveWarning": "此操作不可逆,请谨慎确认。"
+    },
+    "tasks": {
+      "drawerTitle": "任务面板",
+      "empty": "暂无任务。",
+      "statusPending": "等待中",
+      "statusRunning": "运行中",
+      "statusDone": "已完成",
+      "statusFailed": "失败",
+      "statusCancelled": "已取消",
+      "cancel": "取消任务"
+    },
+    "tabs": {
+      "overview": "概览",
+      "execute": "执行",
+      "history": "历史",
+      "inspect": "详情"
+    },
+    "data": {},
+    "models": {},
+    "backtest": {},
+    "signals": {}
   }
 }
