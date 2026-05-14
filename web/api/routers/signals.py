@@ -182,6 +182,26 @@ def _value_from_positions(rows: list[dict]) -> Optional[float]:
     return total if total > 0 else None
 
 
+def _strategy_identity(strategy: object) -> tuple[str, str]:
+    if not isinstance(strategy, dict):
+        return "unknown", "unknown strategy"
+
+    identity = {
+        key: strategy.get(key)
+        for key in ("market", "topk", "n_drop", "hold_thresh", "start_date")
+        if strategy.get(key) is not None
+    }
+    signature = json.dumps(identity, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    label = (
+        f"{identity.get('market', '-')}"
+        f" / topk={identity.get('topk', '-')}"
+        f" / n_drop={identity.get('n_drop', '-')}"
+        f" / hold={identity.get('hold_thresh', '-')}"
+        f" / start={identity.get('start_date', '-')}"
+    )
+    return signature, label
+
+
 def _parse_rebalance_cache(path: Path) -> Optional[dict]:
     try:
         data = json.loads(path.read_text(encoding="utf-8"))
@@ -202,6 +222,8 @@ def _parse_rebalance_cache(path: Path) -> Optional[dict]:
     buy_amount = sum(action["amount"] or 0 for action in actions if action["side"] == "buy")
     sell_amount = sum(action["amount"] or 0 for action in actions if action["side"] == "sell")
     stat = path.stat()
+    strategy = data.get("strategy") if isinstance(data.get("strategy"), dict) else {}
+    strategy_signature, strategy_label = _strategy_identity(strategy)
 
     return {
         "filename": path.name,
@@ -212,7 +234,9 @@ def _parse_rebalance_cache(path: Path) -> Optional[dict]:
         "next_trade_date": data.get("next_trade_date"),
         "created_at": data.get("created_at"),
         "mock": bool(data.get("mock", False)),
-        "strategy": data.get("strategy") if isinstance(data.get("strategy"), dict) else {},
+        "strategy": strategy,
+        "strategy_signature": strategy_signature,
+        "strategy_label": strategy_label,
         "portfolio_value": portfolio_value,
         "target_value": target_value,
         "holdings_count": len(target_holdings or executed_holdings),

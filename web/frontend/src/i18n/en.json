@@ -703,9 +703,13 @@
         "sellAmount": "Sell amount",
         "buyCount": "Buy count",
         "sellCount": "Sell count",
+        "strategySelector": "Tracked strategy / backtest config",
+        "strategySelectorHint": "History charts are filtered to one strategy signature so value and holdings are not mixed across backtest configurations.",
+        "trackedRuns": "Tracked runs",
         "noTasks": "No signal tasks yet.",
         "noFiles": "No signal files found.",
         "noRebalanceCaches": "No rebalance cache files found.",
+        "noMatchingStrategy": "No cache files match the selected strategy.",
         "noHoldings": "No holdings are available in the latest cache."
       },
       "inspect": {

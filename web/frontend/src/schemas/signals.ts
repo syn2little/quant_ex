@@ -76,6 +76,8 @@ export const RebalanceCacheSchema = z.object({
   created_at: z.string().nullable().optional(),
   mock: z.boolean(),
   strategy: z.record(z.string(), z.unknown()),
+  strategy_signature: z.string(),
+  strategy_label: z.string(),
   portfolio_value: z.number().nullable(),
   target_value: z.number().nullable(),
   holdings_count: z.number(),

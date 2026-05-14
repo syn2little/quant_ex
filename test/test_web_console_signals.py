@@ -86,7 +86,7 @@ def test_signals_rebalance_history_parses_cache(monkeypatch, tmp_path):
           "next_trade_date": "2026-05-15",
           "created_at": "2026-05-14T18:37:31",
           "mock": true,
-          "strategy": {"market": "csi1000", "topk": 15},
+          "strategy": {"market": "csi1000", "topk": 15, "n_drop": 3, "hold_thresh": 5, "start_date": "2024-01-01"},
           "display_portfolio_pnl": {"total_value": 120000},
           "target_positions": {
             "SH600000": {"shares": 1000, "price": 10, "value": 10000},
@@ -116,6 +116,8 @@ def test_signals_rebalance_history_parses_cache(monkeypatch, tmp_path):
     item = body[0]
     assert item["filename"] == cache_file.name
     assert item["trade_date"] == "2026-05-14"
+    assert item["strategy_signature"] == '{"hold_thresh":5,"market":"csi1000","n_drop":3,"start_date":"2024-01-01","topk":15}'
+    assert item["strategy_label"] == "csi1000 / topk=15 / n_drop=3 / hold=5 / start=2024-01-01"
     assert item["portfolio_value"] == 120000
     assert item["target_value"] == 50000
     assert item["holdings_count"] == 2

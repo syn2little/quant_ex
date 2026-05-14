@@ -703,9 +703,13 @@
         "sellAmount": "卖出金额",
         "buyCount": "买入笔数",
         "sellCount": "卖出笔数",
+        "strategySelector": "跟踪策略 / 回测配置",
+        "strategySelectorHint": "历史曲线只展示同一个策略签名，避免不同回测配置的市值和持仓混在一起。",
+        "trackedRuns": "跟踪记录数",
         "noTasks": "暂无信号任务。",
         "noFiles": "未找到信号文件。",
         "noRebalanceCaches": "未找到调仓缓存文件。",
+        "noMatchingStrategy": "没有匹配所选策略的调仓缓存。",
         "noHoldings": "最新缓存中没有可用持仓。"
       },
       "inspect": {

@@ -657,7 +657,43 @@ function RebalanceCacheHistory({
   loading: boolean;
 }) {
   const { t } = useTranslation();
-  const latest = caches[0];
+  const strategyOptions = useMemo(() => {
+    const groups = new Map<string, { signature: string; label: string; count: number; latest: string }>();
+    caches.forEach((cache) => {
+      const existing = groups.get(cache.strategy_signature);
+      const date = cacheDate(cache);
+      if (existing) {
+        existing.count += 1;
+        if (date > existing.latest) existing.latest = date;
+      } else {
+        groups.set(cache.strategy_signature, {
+          signature: cache.strategy_signature,
+          label: cache.strategy_label,
+          count: 1,
+          latest: date,
+        });
+      }
+    });
+    return Array.from(groups.values()).sort((a, b) => b.latest.localeCompare(a.latest));
+  }, [caches]);
+  const [selectedSignature, setSelectedSignature] = useState("");
+
+  useEffect(() => {
+    if (strategyOptions.length === 0) {
+      setSelectedSignature("");
+      return;
+    }
+    if (!strategyOptions.some((option) => option.signature === selectedSignature)) {
+      setSelectedSignature(strategyOptions[0].signature);
+    }
+  }, [selectedSignature, strategyOptions]);
+
+  const selectedCaches = useMemo(
+    () => caches.filter((cache) => cache.strategy_signature === selectedSignature),
+    [caches, selectedSignature],
+  );
+  const latest = selectedCaches[0];
+  const selectedOption = strategyOptions.find((option) => option.signature === selectedSignature);
 
   return (
     <Card title={t("console.signals.history.rebalanceCaches")} accent="amber">
@@ -669,7 +705,27 @@ function RebalanceCacheHistory({
         </p>
       ) : (
         <div className="space-y-4">
-          <RebalanceCharts caches={caches} />
+          <div className="grid gap-3 lg:grid-cols-[1fr_220px]">
+            <div>
+              <FieldLabel>{t("console.signals.history.strategySelector")}</FieldLabel>
+              <Select
+                options={strategyOptions.map((option) => ({
+                  value: option.signature,
+                  label: `${option.label} (${option.count})`,
+                }))}
+                value={selectedSignature}
+                onChange={setSelectedSignature}
+              />
+            </div>
+            <div className="rounded-sm border border-terminal-border-dim px-3 py-2 text-xs">
+              <p className="font-mono uppercase text-terminal-text-dim">{t("console.signals.history.trackedRuns")}</p>
+              <p className="mt-1 font-mono text-lg text-terminal-text-bright">{selectedOption?.count ?? 0}</p>
+            </div>
+          </div>
+          <p className="text-xs text-terminal-text-dim">
+            {t("console.signals.history.strategySelectorHint")}
+          </p>
+          <RebalanceCharts caches={selectedCaches} />
           {latest && <TopHoldingsPanel cache={latest} />}
           <div className="overflow-auto">
             <table className="w-full text-left text-xs">
@@ -685,7 +741,7 @@ function RebalanceCacheHistory({
                 </tr>
               </thead>
               <tbody>
-                {caches.map((cache) => {
+                {selectedCaches.map((cache) => {
                   const linkedTask = tasks.find((task) => matchesResultPath(task, cache));
                   return (
                     <tr key={cache.filename} className="border-t border-terminal-border-dim">
@@ -710,6 +766,13 @@ function RebalanceCacheHistory({
                     </tr>
                   );
                 })}
+                {selectedCaches.length === 0 && (
+                  <tr>
+                    <td className="px-2 py-4 text-terminal-text-dim" colSpan={7}>
+                      {t("console.signals.history.noMatchingStrategy")}
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
