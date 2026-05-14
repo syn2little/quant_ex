@@ -48,3 +48,31 @@ def test_data_fetch_returns_unified_envelope_for_real_run(monkeypatch):
     assert "task_id" in body
     assert body["dry_run"] is False
     assert body["preview"] is None
+
+
+def test_models_train_returns_unified_envelope_for_dry_run():
+    client = TestClient(create_app())
+
+    response = client.post("/api/models/train", json={
+        "model_type": "lgbm",
+        "tag": "ci_test",
+        "dry_run": True,
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert "task_id" in body
+    assert body["dry_run"] is True
+    assert body["preview"] is not None
+    assert "final_market" in body["preview"]
+
+
+def test_models_delete_dry_run_lists_files():
+    client = TestClient(create_app())
+
+    response = client.delete("/api/models/nonexistent.pkl?dry_run=true")
+    assert response.status_code in (200, 404)
+    if response.status_code == 200:
+        body = response.json()
+        assert body["dry_run"] is True
+        assert "files" in body["preview"]

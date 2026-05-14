@@ -382,7 +382,7 @@ git commit -m "feat(web/api): data router returns {task_id, dry_run, preview} en
 - Modify: `web/api/routers/models.py`
 - Test: `test/test_web_console_contract.py`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 追加到 `test/test_web_console_contract.py`:
 
@@ -417,7 +417,7 @@ def test_models_delete_dry_run_lists_files(tmp_path, monkeypatch):
         assert "files" in body["preview"]
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 ```bash
 ./.venv/bin/python -m pytest test/test_web_console_contract.py::test_models_train_returns_unified_envelope_for_dry_run -v
@@ -425,7 +425,7 @@ def test_models_delete_dry_run_lists_files(tmp_path, monkeypatch):
 
 Expected: FAIL
 
-- [ ] **Step 3: 改造 `web/api/routers/models.py`**
+- [x] **Step 3: 改造 `web/api/routers/models.py`**
 
 `TrainRequest` 加 `dry_run: bool = True`、`market: Optional[str] = None`、`train_start_date: Optional[str] = None`、`train_end_date: Optional[str] = None`、`config_override: Optional[str] = None`。
 
@@ -502,7 +502,7 @@ async def delete_model(filename: str, dry_run: bool = Query(True)):
     return {"task_id": task_id, "dry_run": False, "preview": None}
 ```
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
 
 ```bash
 ./.venv/bin/python -m pytest test/test_web_console_contract.py -v
@@ -511,7 +511,7 @@ async def delete_model(filename: str, dry_run: bool = Query(True)):
 
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/api/routers/models.py test/test_web_console_contract.py
