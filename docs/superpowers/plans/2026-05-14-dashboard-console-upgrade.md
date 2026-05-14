@@ -1507,7 +1507,7 @@ git commit -m "feat(web): i18n console.common/tasks/tabs namespaces"
 
 ### Task 0.12: Phase 0 完整验收门禁
 
-- [ ] **Step 1: 后端全测**
+- [x] **Step 1: 后端全测**
 
 ```bash
 ./.venv/bin/python -m pytest test/test_web_dashboard.py test/test_web_console_contract.py test/test_agent_strategy_iteration.py -v
@@ -1515,7 +1515,7 @@ git commit -m "feat(web): i18n console.common/tasks/tabs namespaces"
 
 Expected: 全 PASS。
 
-- [ ] **Step 2: 后端 app 路由数量自检**
+- [x] **Step 2: 后端 app 路由数量自检**
 
 ```bash
 ./.venv/bin/python -c "from web.api.app import create_app; app = create_app(); print('routes', len(app.routes))"
@@ -1523,7 +1523,7 @@ Expected: 全 PASS。
 
 Expected: 输出 routes 数(应 ≥ 之前的 55,具体值与新增端点数相关)。
 
-- [ ] **Step 3: 前端 TypeScript + build**
+- [x] **Step 3: 前端 TypeScript + build**
 
 ```bash
 cd web/frontend && npx tsc --noEmit && npm run build
@@ -1531,7 +1531,7 @@ cd web/frontend && npx tsc --noEmit && npm run build
 
 Expected: 无错误,build 成功。
 
-- [ ] **Step 4: 启动服务 + AgentRuns 页冒烟**
+- [x] **Step 4: 启动服务 + AgentRuns 页冒烟**
 
 ```bash
 ./.venv/bin/python web/run_web.py &
@@ -1544,7 +1544,7 @@ kill $SERVER_PID
 
 Expected: `/api/agents/runs` 返回 JSON 列表(可能为空数组);`/agent-runs` 返回包含 `<div id="root">` 的 HTML。
 
-- [ ] **Step 5: Push Phase 0 分支**
+- [x] **Step 5: Push Phase 0 分支**
 
 ```bash
 git push -u origin dashboard-console-base
@@ -1552,7 +1552,7 @@ git push -u origin dashboard-console-base
 
 Expected: push 成功。
 
-- [ ] **Step 6: 总结 Phase 0 完成**
+- [x] **Step 6: 总结 Phase 0 完成**
 
 主 agent 总结:列出本阶段新增 / 修改文件、commit 数、关键决策(尤其是 update-qlib 是否实现)。这段总结直接作为 Phase 1 各 subagent 派发 prompt 的上下文。
 
@@ -2692,9 +2692,9 @@ Expected: push 成功。
 
 - update-qlib 包装可行性:[NO - `run_update_qlib_data.py --help` 未提供 `--dry-run`;实际执行涉及 Dolt/qlib 数据更新、网络/磁盘副作用,本轮不包装,Subagent A 跳过 qlib 增量更新卡片]
 - TaskState 新增字段实际命名:[`page_key`, `action_key`, `result_paths`(默认值已确认)]
-- Phase 0 commit 数:[N]
-- Phase 0 测试用例数:[N]
-- 任何后端契约偏差:[N/A 或描述]
+- Phase 0 commit 数:[12]
+- Phase 0 测试用例数:[10 个新增 contract 用例;Phase 0 门禁共 59 个 pytest 用例通过]
+- 任何后端契约偏差:[`/data/update-qlib` 未实现(按 spec 可选分支 skip);`/signals/notify-test` dry-run 为兼容旧前端测试,在统一 `{task_id,dry_run,preview}` 外保留 `success/sent/channels` 顶层字段;`factors.*` task 使用 `page_key="factors"` 仅供后端任务元数据,Phase 1 console 不消费]
 
 ---
 
