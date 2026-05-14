@@ -14,12 +14,16 @@ router = APIRouter()
 
 
 class FetchRequest(BaseModel):
-    type: str
+    type: Optional[str] = None
+    data_types: Optional[list[str]] = None
+    date_range: Optional[dict[str, Optional[str]]] = None
     scope: str = "all"
     symbols: Optional[list[str]] = None
     universe: Optional[str] = None
     ttl: Optional[int] = None
     force: bool = False
+    force_refresh: bool = False
+    dry_run: bool = True
 
 
 class CacheStatus(BaseModel):
@@ -33,6 +37,75 @@ class CacheStatus(BaseModel):
 def _get_fetcher_registry():
     from quant_ex.run_fetch_data import _FETCHER_REGISTRY
     return _FETCHER_REGISTRY
+
+
+def _resolve_fetch_types(req: FetchRequest) -> list[str]:
+    if req.data_types:
+        return req.data_types
+    if req.type == "all":
+        return list(_get_fetcher_registry().keys())
+    if req.type:
+        return [req.type]
+    return ["financial"]
+
+
+def _build_fetch_preview(req: FetchRequest) -> dict:
+    data_types = _resolve_fetch_types(req)
+    registry = _get_fetcher_registry()
+    skipped_cached = []
+    if not (req.force_refresh or req.force):
+        for data_type in data_types:
+            cache_dir = registry.get(data_type, (None, f"./cache/{data_type}", None))[1]
+            cache_path = Path(cache_dir)
+            if cache_path.exists() and any(cache_path.glob("*.csv")):
+                skipped_cached.append(data_type)
+    return {
+        "data_types": data_types,
+        "date_range": req.date_range,
+        "force_refresh": req.force_refresh or req.force,
+        "estimated_files": len(data_types),
+        "estimated_minutes": max(1, len(data_types) * 2),
+        "estimated_disk_mb": len(data_types) * 5,
+        "skipped_cached": skipped_cached,
+    }
+
+
+def _do_fetch(**kwargs) -> dict:
+    from quant_ex.run_fetch_data import fetch_generic, _FETCHER_REGISTRY
+
+    data_types = kwargs["data_types"]
+    ttl_override = kwargs.get("ttl")
+    force_refresh = kwargs.get("force_refresh", False)
+
+    results = {}
+    for data_type in data_types:
+        if data_type not in _FETCHER_REGISTRY:
+            results[data_type] = "skipped: unknown type"
+            continue
+        _cls_name, cache_dir, ttl = _FETCHER_REGISTRY[data_type]
+        ttl = 0 if force_refresh else (ttl_override or ttl)
+        try:
+            fetch_generic(data_type, symbols=kwargs.get("symbols") or [], cache_dir=cache_dir, ttl_days=ttl)
+            results[data_type] = "done"
+        except Exception as exc:
+            results[data_type] = f"error: {exc}"
+    return results
+
+
+def _list_expired_files(data_type: str) -> tuple[list[Path], int]:
+    registry = _get_fetcher_registry()
+    if data_type not in registry:
+        raise HTTPException(status_code=400, detail=f"Unknown type: {data_type}")
+    _, cache_dir, ttl = registry[data_type]
+    cache_path = Path(cache_dir)
+    if not cache_path.exists():
+        return [], ttl
+    expired = []
+    for path in cache_path.glob("*.csv"):
+        mtime = date_mod.fromtimestamp(path.stat().st_mtime)
+        if (date_mod.today() - mtime).days > ttl:
+            expired.append(path)
+    return expired, ttl
 
 
 def _normalize_sector_symbol(code: str) -> str:
@@ -118,28 +191,30 @@ async def cache_status():
 @router.post("/fetch")
 async def start_fetch(req: FetchRequest):
     tm = get_task_manager()
+    data_types = _resolve_fetch_types(req)
+    if req.dry_run:
+        preview = _build_fetch_preview(req)
+        task_id = await tm.start_sync_task(
+            "data_fetch_dry_run",
+            lambda: preview,
+            page_key="data",
+            action_key="data.fetch",
+        )
+        return {"task_id": task_id, "dry_run": True, "preview": preview}
 
-    def _fetch():
-        from quant_ex.run_fetch_data import _get_fetcher_cls, fetch_generic, _FETCHER_REGISTRY
-        registry = _FETCHER_REGISTRY
-        if req.type == "all":
-            types_to_fetch = list(registry.keys())
-        else:
-            types_to_fetch = [req.type]
-
-        results = {}
-        for t in types_to_fetch:
-            cls_name, cache_dir, ttl = registry[t]
-            ttl = req.ttl or ttl
-            try:
-                fetch_generic(t, symbols=[], cache_dir=cache_dir, ttl_days=ttl)
-                results[t] = "done"
-            except Exception as exc:
-                results[t] = f"error: {exc}"
-        return results
-
-    task_id = await tm.start_sync_task("data_fetch", _fetch)
-    return {"task_id": task_id}
+    task_id = await tm.start_sync_task(
+        "data_fetch",
+        _do_fetch,
+        page_key="data",
+        action_key="data.fetch",
+        data_types=data_types,
+        date_range=req.date_range,
+        force_refresh=req.force_refresh or req.force,
+        symbols=req.symbols or [],
+        universe=req.universe,
+        ttl=req.ttl,
+    )
+    return {"task_id": task_id, "dry_run": False, "preview": None}
 
 
 @router.get("/fetch/{task_id}/stream")
@@ -148,21 +223,43 @@ async def stream_fetch(task_id: str):
 
 
 @router.delete("/cache/{data_type}/expired")
-async def delete_expired(data_type: str):
-    registry = _get_fetcher_registry()
-    if data_type not in registry:
-        raise HTTPException(status_code=400, detail=f"Unknown type: {data_type}")
-    _, cache_dir, ttl = registry[data_type]
-    d = Path(cache_dir)
-    if not d.exists():
-        return {"deleted": 0}
-    deleted = 0
-    for f in d.glob("*.csv"):
-        mtime = date_mod.fromtimestamp(f.stat().st_mtime)
-        if (date_mod.today() - mtime).days > ttl:
-            f.unlink()
-            deleted += 1
-    return {"deleted": deleted}
+async def delete_expired(data_type: str, dry_run: bool = Query(True)):
+    tm = get_task_manager()
+    expired, ttl = _list_expired_files(data_type)
+    files = [str(path) for path in expired]
+    freed_bytes = sum(path.stat().st_size for path in expired)
+
+    if dry_run:
+        preview = {
+            "data_type": data_type,
+            "ttl_days": ttl,
+            "files": files,
+            "count": len(files),
+            "freed_bytes": freed_bytes,
+        }
+        task_id = await tm.start_sync_task(
+            "data_purge_dry_run",
+            lambda: preview,
+            page_key="data",
+            action_key="data.purge_expired",
+        )
+        return {"task_id": task_id, "dry_run": True, "preview": preview}
+
+    def _do_purge() -> dict:
+        deleted = 0
+        for path in expired:
+            if path.exists():
+                path.unlink()
+                deleted += 1
+        return {"deleted": deleted, "result_paths": []}
+
+    task_id = await tm.start_sync_task(
+        "data_purge",
+        _do_purge,
+        page_key="data",
+        action_key="data.purge_expired",
+    )
+    return {"task_id": task_id, "dry_run": False, "preview": None}
 
 
 @router.get("/stock-lookup/{symbol}")

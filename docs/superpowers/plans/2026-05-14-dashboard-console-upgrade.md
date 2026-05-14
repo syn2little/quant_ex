@@ -232,7 +232,7 @@ git commit -m "feat(web): extend TaskState with page_key/action_key/result_paths
 - Modify: `web/api/routers/data.py`
 - Test: `test/test_web_console_contract.py`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 在 `test/test_web_console_contract.py` 追加:
 
@@ -270,7 +270,7 @@ def test_data_fetch_returns_unified_envelope_for_real_run(monkeypatch):
     assert body["preview"] is None
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 ```bash
 ./.venv/bin/python -m pytest test/test_web_console_contract.py::test_data_fetch_returns_unified_envelope_for_dry_run -v
@@ -278,7 +278,7 @@ def test_data_fetch_returns_unified_envelope_for_real_run(monkeypatch):
 
 Expected: FAIL(KeyError 或 assertion error)
 
-- [ ] **Step 3: 修改 `web/api/routers/data.py` 的 `start_fetch`**
+- [x] **Step 3: 修改 `web/api/routers/data.py` 的 `start_fetch`**
 
 将 `FetchRequest` 加入 `dry_run: bool = True` 字段。改造 `start_fetch`:
 
@@ -325,7 +325,7 @@ def _build_fetch_preview(req: FetchRequest) -> dict:
 
 未实现的辅助函数提供最小 stub,Phase 1 subagent A 在前端使用时按需扩展。
 
-- [ ] **Step 4: 改 `DELETE /cache/{type}/expired`**
+- [x] **Step 4: 改 `DELETE /cache/{type}/expired`**
 
 加上 `dry_run: bool = Query(True)` 查询参数:
 
@@ -358,7 +358,7 @@ async def delete_expired(data_type: str, dry_run: bool = Query(True)):
     return {"task_id": task_id, "dry_run": False, "preview": None}
 ```
 
-- [ ] **Step 5: 跑测试**
+- [x] **Step 5: 跑测试**
 
 ```bash
 ./.venv/bin/python -m pytest test/test_web_console_contract.py -v
@@ -367,7 +367,7 @@ async def delete_expired(data_type: str, dry_run: bool = Query(True)):
 
 Expected: 新增 + 既有测试全 PASS。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add web/api/routers/data.py test/test_web_console_contract.py
