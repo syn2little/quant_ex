@@ -1,690 +1,751 @@
-import { useState, useEffect } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
+import {
+  ConfirmDialog,
+  ConsolePageLayout,
+  DryRunPreview,
+  TaskChip,
+} from "../components/console";
 import { Card } from "../components/ui/Card";
-import { Tabs } from "../components/ui/Tabs";
-import { Badge } from "../components/ui/Badge";
 import { Select } from "../components/ui/Select";
 import { NumberInput } from "../components/ui/NumberInput";
 import { DatePicker } from "../components/ui/DatePicker";
-import { TaskStatus } from "../components/ui/TaskStatus";
 import { Skeleton } from "../components/ui/Skeleton";
-import { get, post } from "../api/client";
+import { get } from "../api/client";
+import {
+  fetchRegime,
+  fetchSignalContent,
+  fetchSignalHistory,
+  triggerGenerate,
+  triggerNotifyTest,
+  triggerRebalance,
+} from "../api/signals";
+import type { RegimeInfo, SignalFile } from "../api/signals";
+import type { TaskTrigger } from "../api/tasks";
+import type { TaskState } from "../api/types";
+import {
+  GenerateSchema,
+  NotifyTestSchema,
+  RebalanceSchema,
+} from "../schemas/signals";
+import type {
+  GenerateParams,
+  NotifyTestParams,
+  RebalanceParams,
+} from "../schemas/signals";
+import { useTaskTracking } from "../hooks/useTaskTracking";
 
-interface ModelInfo {
+type ModelInfo = {
   filename: string;
   size_mb: number;
   modified: string;
   meta: Record<string, unknown>;
-}
-interface SignalFile {
-  filename: string;
-  size_kb: number;
-  modified: string;
-}
-interface SignalContent {
-  content: string;
-}
-interface RegimeInfo {
-  enabled: boolean;
-  regime: number | null;
-  label: string | null;
-  error?: string;
-}
+};
 
-const SIGNALS_TABS = [
-  { key: "generate", label: "Generate" },
-  { key: "daily", label: "Daily" },
-  { key: "rebalance", label: "Rebalance" },
-  { key: "regime", label: "Regime" },
-  { key: "notification", label: "Notification" },
+const TASK_TYPES = ["signal_generate", "rebalance", "notify_test"];
+const NOTIFY_CHANNELS = [
+  { value: "all", label: "All" },
+  { value: "bark", label: "Bark" },
+  { value: "pushplus", label: "PushPlus" },
+  { value: "dingtalk", label: "DingTalk" },
+  { value: "serverchan", label: "ServerChan" },
+  { value: "wechat_mp", label: "WeChat MP" },
 ];
+const REBALANCE_CHANNELS = [...NOTIFY_CHANNELS, { value: "none", label: "None" }];
 
-// ─── Generate Tab ──────────────────────────────────────────────────────
+function FieldLabel({ children }: { children: string }) {
+  return (
+    <p className="mb-1 text-xs font-mono uppercase text-terminal-text-dim">
+      {children}
+    </p>
+  );
+}
 
-function GenerateTab() {
-  const { t } = useTranslation();
-  const [models, setModels] = useState<ModelInfo[]>([]);
-  const [modelPath, setModelPath] = useState("");
-  const [account, setAccount] = useState(1000000);
-  const [positions, setPositions] = useState("");
-  const [dryRun, setDryRun] = useState(true);
-  const [taskId, setTaskId] = useState<string | null>(null);
+function TextInput({
+  value,
+  onChange,
+  placeholder,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+}) {
+  return (
+    <input
+      type="text"
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      placeholder={placeholder}
+      className="w-full rounded-sm border border-terminal-border bg-terminal-surface px-3 py-2 text-xs font-mono text-terminal-text placeholder:text-terminal-text-dim transition-colors hover:border-terminal-text-dim focus:border-terminal-green focus:outline-none"
+    />
+  );
+}
 
-  useEffect(() => {
-    get<ModelInfo[]>("/models").then((data) => {
-      setModels(data);
-      if (data.length > 0 && !modelPath) setModelPath(data[0].filename);
-    });
-  }, []);
+function TextArea({
+  value,
+  onChange,
+  placeholder,
+  rows = 3,
+}: {
+  value: string;
+  onChange: (value: string) => void;
+  placeholder?: string;
+  rows?: number;
+}) {
+  return (
+    <textarea
+      value={value}
+      onChange={(event) => onChange(event.target.value)}
+      rows={rows}
+      placeholder={placeholder}
+      className="w-full rounded-sm border border-terminal-border bg-terminal-surface px-3 py-2 text-xs font-mono text-terminal-text placeholder:text-terminal-text-dim transition-colors hover:border-terminal-text-dim focus:border-terminal-green focus:outline-none"
+    />
+  );
+}
 
-  const handleGenerate = async () => {
-    const res = await post<{ task_id: string }>("/signals/generate", {
-      model_path: modelPath,
-      account,
-      positions: positions || null,
-      dry_run: dryRun,
-    });
-    setTaskId(res.task_id);
-  };
+function Toggle({
+  checked,
+  onChange,
+  label,
+  danger,
+}: {
+  checked: boolean;
+  onChange: (checked: boolean) => void;
+  label: string;
+  danger?: boolean;
+}) {
+  return (
+    <label
+      className={`flex items-center gap-2 text-xs font-mono ${
+        danger ? "text-terminal-red" : "text-terminal-text"
+      }`}
+    >
+      <input
+        type="checkbox"
+        checked={checked}
+        onChange={(event) => onChange(event.target.checked)}
+        className={danger ? "accent-terminal-red" : "accent-terminal-green"}
+      />
+      {label}
+    </label>
+  );
+}
 
-  const modelOptions = models.map((m) => ({
-    value: m.filename,
-    label: `${m.filename} (${m.size_mb} MB)`,
-  }));
+function ActionButton({
+  children,
+  disabled,
+  onClick,
+  danger,
+  testId,
+}: {
+  children: string;
+  disabled?: boolean;
+  onClick: () => void;
+  danger?: boolean;
+  testId?: string;
+}) {
+  return (
+    <button
+      type="button"
+      data-testid={testId}
+      onClick={onClick}
+      disabled={disabled}
+      className={`rounded-sm border px-3 py-1.5 text-xs font-mono transition-colors disabled:opacity-30 ${
+        danger
+          ? "border-terminal-red text-terminal-red hover:bg-terminal-red-glow"
+          : "border-terminal-green text-terminal-green hover:bg-terminal-green-glow"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function PreviewBlock({ result }: { result: TaskTrigger<Record<string, unknown>> | null }) {
+  return (
+    <DryRunPreview
+      preview={result?.preview ?? null}
+      renderPreview={(preview) => <PreviewDetails preview={preview as Record<string, unknown>} />}
+    />
+  );
+}
+
+function PreviewDetails({ preview }: { preview: Record<string, unknown> }) {
+  const diff = preview.diff as Record<string, unknown> | undefined;
+  const notifyTemplate = preview.notify_template as Record<string, unknown> | undefined;
+
+  if (diff || notifyTemplate) {
+    return (
+      <div className="space-y-3 text-xs">
+        {diff && (
+          <div className="grid grid-cols-3 gap-2">
+            <Metric label="Buys" value={arraySize(diff.buys)} />
+            <Metric label="Sells" value={arraySize(diff.sells)} />
+            <Metric label="Net value" value={formatValue(diff.net_value)} />
+          </div>
+        )}
+        {notifyTemplate && (
+          <pre className="max-h-52 overflow-auto rounded-sm bg-white p-2 text-xs">
+            {JSON.stringify(notifyTemplate, null, 2)}
+          </pre>
+        )}
+      </div>
+    );
+  }
 
   return (
-    <div className="space-y-4 max-w-2xl">
-      <Card title={t("signals.generateTab")}>
-        <div className="space-y-4">
-          <div>
-            <p className="text-xs font-mono text-terminal-text-dim uppercase mb-1">
-              {t("signals.model")}
-            </p>
-            <Select
-              options={modelOptions}
-              value={modelPath}
-              onChange={setModelPath}
-              searchable
-            />
-          </div>
-          <div>
-            <p className="text-xs font-mono text-terminal-text-dim uppercase mb-1">
-              {t("signals.account")}
-            </p>
-            <NumberInput
-              value={account}
-              onChange={(v) => setAccount(v ?? 1000000)}
-              min={10000}
-              step={100000}
-            />
-          </div>
-          <div>
-            <p className="text-xs font-mono text-terminal-text-dim uppercase mb-1">
-              {t("signals.positions")}
-            </p>
-            <textarea
-              value={positions}
-              onChange={(e) => setPositions(e.target.value)}
-              rows={3}
-              className="w-full px-3 py-2 bg-terminal-surface border border-terminal-border rounded-sm text-xs font-mono text-terminal-text placeholder:text-terminal-text-dim focus:outline-none focus:border-terminal-green hover:border-terminal-text-dim transition-colors"
-              placeholder={t("signals.positionsPlaceholder")}
-            />
-          </div>
-          <label className="flex items-center gap-2 text-xs font-mono text-terminal-text cursor-pointer">
-            <input
-              type="checkbox"
-              checked={dryRun}
-              onChange={(e) => setDryRun(e.target.checked)}
-              className="accent-terminal-green"
-            />
-            {t("signals.dryRun")}
-          </label>
-          <button
-            onClick={handleGenerate}
-            disabled={!modelPath}
-            className="px-3 py-1.5 text-xs font-mono border border-terminal-green text-terminal-green hover:bg-terminal-green-glow transition-colors rounded-sm disabled:opacity-30"
-          >
-            {t("signals.generateBtn")}
-          </button>
-        </div>
-      </Card>
-      <TaskStatus taskId={taskId} />
+    <pre className="max-h-64 overflow-auto text-xs leading-5">
+      {JSON.stringify(preview, null, 2)}
+    </pre>
+  );
+}
+
+function Metric({ label, value }: { label: string; value: string | number }) {
+  return (
+    <div className="rounded-sm border border-slate-200 bg-white px-3 py-2">
+      <p className="text-[10px] uppercase text-slate-500">{label}</p>
+      <p className="font-mono text-sm text-slate-900">{value}</p>
     </div>
   );
 }
 
-// ─── Daily Tab (full params) ───────────────────────────────────────────
+function arraySize(value: unknown) {
+  return Array.isArray(value) ? value.length : 0;
+}
 
-function DailyTab() {
-  const { t } = useTranslation();
+function formatValue(value: unknown) {
+  return typeof value === "number" ? value.toFixed(2) : String(value ?? "-");
+}
+
+function useModels() {
   const [models, setModels] = useState<ModelInfo[]>([]);
-  const [modelPath, setModelPath] = useState("");
-  const [account, setAccount] = useState(1000000);
-  const [positions, setPositions] = useState("");
-  const [config, setConfig] = useState("");
-  const [dryRun, setDryRun] = useState(true);
-  const [taskId, setTaskId] = useState<string | null>(null);
 
   useEffect(() => {
-    get<ModelInfo[]>("/models").then((data) => {
-      setModels(data);
-      if (data.length > 0 && !modelPath) setModelPath(data[0].filename);
-    });
+    get<ModelInfo[]>("/models")
+      .then(setModels)
+      .catch(() => setModels([]));
   }, []);
 
-  const handleDaily = async () => {
-    const body: Record<string, unknown> = {
-      model_path: modelPath,
-      account,
-      positions: positions || null,
-      dry_run: dryRun,
-    };
-    if (config.trim()) body.config = config.trim();
-    const res = await post<{ task_id: string }>("/signals/generate", body);
-    setTaskId(res.task_id);
-  };
+  return models;
+}
 
-  const modelOptions = models.map((m) => ({
-    value: m.filename,
-    label: `${m.filename} (${m.size_mb} MB)`,
-  }));
-
+function ExecuteTab() {
   return (
-    <div className="space-y-4 max-w-2xl">
-      <Card title={t("signals.dailySignal")}>
-        <div className="space-y-4">
-          <div>
-            <p className="text-xs font-mono text-terminal-text-dim uppercase mb-1">
-              {t("signals.model")}
-            </p>
-            <Select
-              options={modelOptions}
-              value={modelPath}
-              onChange={setModelPath}
-              searchable
-            />
-          </div>
-          <div>
-            <p className="text-xs font-mono text-terminal-text-dim uppercase mb-1">
-              {t("signals.account")}
-            </p>
-            <NumberInput
-              value={account}
-              onChange={(v) => setAccount(v ?? 1000000)}
-              min={10000}
-              step={100000}
-            />
-          </div>
-          <div>
-            <p className="text-xs font-mono text-terminal-text-dim uppercase mb-1">
-              {t("signals.positions")}
-            </p>
-            <textarea
-              value={positions}
-              onChange={(e) => setPositions(e.target.value)}
-              rows={2}
-              className="w-full px-3 py-2 bg-terminal-surface border border-terminal-border rounded-sm text-xs font-mono text-terminal-text placeholder:text-terminal-text-dim focus:outline-none focus:border-terminal-green hover:border-terminal-text-dim transition-colors"
-              placeholder={t("signals.positionsPlaceholder")}
-            />
-          </div>
-          <div>
-            <p className="text-xs font-mono text-terminal-text-dim uppercase mb-1">
-              {t("signals.configOverride")}
-            </p>
-            <input
-              type="text"
-              value={config}
-              onChange={(e) => setConfig(e.target.value)}
-              placeholder="config/daily_csi1000.yaml"
-              className="w-full px-3 py-2 bg-terminal-surface border border-terminal-border rounded-sm text-xs font-mono text-terminal-text placeholder:text-terminal-text-dim focus:outline-none focus:border-terminal-green hover:border-terminal-text-dim transition-colors"
-            />
-          </div>
-          <label className="flex items-center gap-2 text-xs font-mono text-terminal-text cursor-pointer">
-            <input
-              type="checkbox"
-              checked={dryRun}
-              onChange={(e) => setDryRun(e.target.checked)}
-              className="accent-terminal-green"
-            />
-            {t("signals.dryRun")}
-          </label>
-          <button
-            onClick={handleDaily}
-            disabled={!modelPath}
-            className="px-3 py-1.5 text-xs font-mono border border-terminal-green text-terminal-green hover:bg-terminal-green-glow transition-colors rounded-sm disabled:opacity-30"
-          >
-            {t("signals.generateDailyBtn")}
-          </button>
-        </div>
-      </Card>
-      <TaskStatus taskId={taskId} />
+    <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+      <GenerateAction />
+      <RebalanceAction />
+      <NotifyTestAction />
     </div>
   );
 }
 
-// ─── Rebalance Tab ─────────────────────────────────────────────────────
-
-function RebalanceTab() {
+function GenerateAction() {
   const { t } = useTranslation();
-  const [mock, setMock] = useState(false);
+  const models = useModels();
+  const [modelPath, setModelPath] = useState("");
+  const [configOverride, setConfigOverride] = useState("");
   const [dryRun, setDryRun] = useState(true);
-  const [config, setConfig] = useState("");
+  const [result, setResult] = useState<TaskTrigger<Record<string, unknown>> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const { trackTask } = useTaskTracking({ pageKey: "signals", taskTypeFilter: TASK_TYPES });
+
+  useEffect(() => {
+    if (!modelPath && models.length > 0) setModelPath(models[0].filename);
+  }, [modelPath, models]);
+
+  const modelOptions = models.map((model) => ({
+    value: model.filename,
+    label: `${model.filename} (${model.size_mb} MB)`,
+  }));
+
+  const submit = async () => {
+    setError(null);
+    const params: GenerateParams = GenerateSchema.parse({
+      model_path: modelPath,
+      config_override: configOverride.trim() || null,
+      dry_run: dryRun,
+    });
+    const response = await triggerGenerate(params);
+    setResult(response);
+    trackTask(response.task_id);
+  };
+
+  return (
+    <Card title={t("console.signals.generate.title")} accent="green">
+      <div className="space-y-4">
+        <div>
+          <FieldLabel>{t("console.signals.fields.modelPath")}</FieldLabel>
+          <Select options={modelOptions} value={modelPath} onChange={setModelPath} searchable />
+        </div>
+        <div>
+          <FieldLabel>{t("console.signals.fields.configOverride")}</FieldLabel>
+          <TextInput
+            value={configOverride}
+            onChange={setConfigOverride}
+            placeholder="config/daily_csi1000.yaml"
+          />
+        </div>
+        <Toggle checked={dryRun} onChange={setDryRun} label={t("console.signals.fields.dryRun")} />
+        <ActionButton
+          onClick={() => submit().catch((err) => setError(String(err)))}
+          disabled={!modelPath}
+          testId="signals-generate-submit"
+        >
+          {dryRun ? t("console.signals.actions.preview") : t("console.signals.actions.submit")}
+        </ActionButton>
+        {error && <p className="text-xs font-mono text-terminal-red">{error}</p>}
+        <PreviewBlock result={result} />
+      </div>
+    </Card>
+  );
+}
+
+function RebalanceAction() {
+  const { t } = useTranslation();
+  const [config, setConfig] = useState("config/daily_csi1000.yaml");
   const [positions, setPositions] = useState("");
   const [positionDate, setPositionDate] = useState("");
   const [minActionValue, setMinActionValue] = useState<number | undefined>(1000);
   const [skipUpdate, setSkipUpdate] = useState(true);
   const [force, setForce] = useState(false);
-  const [notifyChannel, setNotifyChannel] = useState("bark");
-  const [taskId, setTaskId] = useState<string | null>(null);
+  const [notifyChannel, setNotifyChannel] = useState("none");
+  const [dryRun, setDryRun] = useState(true);
+  const [confirmSend, setConfirmSend] = useState(false);
+  const [pendingRealParams, setPendingRealParams] = useState<RebalanceParams | null>(null);
+  const [result, setResult] = useState<TaskTrigger<Record<string, unknown>> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const { trackTask } = useTaskTracking({ pageKey: "signals", taskTypeFilter: TASK_TYPES });
 
-  const handleRun = async () => {
-    const res = await post<{ task_id: string }>("/signals/rebalance", {
-      mock,
-      dry_run: dryRun,
-      config: config.trim() || undefined,
-      positions: positions.trim() || undefined,
-      position_date: positionDate || undefined,
-      min_action_value: minActionValue,
+  const params = (): RebalanceParams =>
+    RebalanceSchema.parse({
+      config,
+      positions: positions.trim() || null,
+      position_date: positionDate || null,
+      min_action_value: minActionValue ?? 1000,
       skip_update: skipUpdate,
       force,
       notify_channel: notifyChannel,
+      dry_run: dryRun,
+      confirm_send: dryRun ? false : confirmSend,
     });
-    setTaskId(res.task_id);
+
+  const submit = async (payload: RebalanceParams) => {
+    const response = await triggerRebalance(payload);
+    setResult(response);
+    trackTask(response.task_id);
+  };
+
+  const handleClick = () => {
+    setError(null);
+    try {
+      const payload = params();
+      if (!payload.dry_run) {
+        setPendingRealParams(payload);
+        return;
+      }
+      submit(payload).catch((err) => setError(String(err)));
+    } catch (err) {
+      setError(String(err));
+    }
   };
 
   return (
-    <div className="space-y-4 max-w-2xl">
-      <Card title={t("signals.rebalanceTab")}>
-        <div className="space-y-4">
-          <p className="text-terminal-text-dim text-xs font-mono">{t("signals.rebalanceNote")}</p>
+    <Card title={t("console.signals.rebalance.title")} accent="amber">
+      <div className="space-y-4">
+        <div>
+          <FieldLabel>{t("console.signals.fields.config")}</FieldLabel>
+          <TextInput value={config} onChange={setConfig} />
+        </div>
+        <div>
+          <FieldLabel>{t("console.signals.fields.positions")}</FieldLabel>
+          <TextArea
+            value={positions}
+            onChange={setPositions}
+            placeholder="SH600000:500,SZ000001:300"
+            rows={2}
+          />
+        </div>
+        <div className="grid grid-cols-2 gap-3">
           <div>
-            <p className="text-xs font-mono text-terminal-text-dim uppercase mb-1">
-              {t("signals.configOverride")}
-            </p>
-            <input
-              type="text"
-              value={config}
-              onChange={(e) => setConfig(e.target.value)}
-              placeholder="config/daily_csi1000.yaml"
-              className="w-full px-3 py-2 bg-terminal-surface border border-terminal-border rounded-sm text-xs font-mono text-terminal-text placeholder:text-terminal-text-dim focus:outline-none focus:border-terminal-green hover:border-terminal-text-dim transition-colors"
-            />
-          </div>
-          <div>
-            <p className="text-xs font-mono text-terminal-text-dim uppercase mb-1">
-              {t("signals.positions")}
-            </p>
-            <textarea
-              value={positions}
-              onChange={(e) => setPositions(e.target.value)}
-              rows={2}
-              className="w-full px-3 py-2 bg-terminal-surface border border-terminal-border rounded-sm text-xs font-mono text-terminal-text placeholder:text-terminal-text-dim focus:outline-none focus:border-terminal-green hover:border-terminal-text-dim transition-colors"
-              placeholder={t("signals.positionsPlaceholder")}
-            />
-          </div>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <p className="text-xs font-mono text-terminal-text-dim uppercase mb-1">
-                {t("signals.positionDate")}
-              </p>
-              <DatePicker value={positionDate} onChange={setPositionDate} />
-            </div>
-            <div>
-              <p className="text-xs font-mono text-terminal-text-dim uppercase mb-1">
-                {t("signals.minActionValue")}
-              </p>
-              <NumberInput
-                value={minActionValue}
-                onChange={(v) => setMinActionValue(v)}
-                min={0}
-                step={500}
-                placeholder="1000"
-              />
-            </div>
+            <FieldLabel>{t("console.signals.fields.positionDate")}</FieldLabel>
+            <DatePicker value={positionDate} onChange={setPositionDate} />
           </div>
           <div>
-            <p className="text-xs font-mono text-terminal-text-dim uppercase mb-1">
-              {t("signals.notifyChannel")}
-            </p>
-            <Select
-              options={[
-                { value: "bark", label: "Bark" },
-                { value: "all", label: t("signals.allChannels") },
-              ]}
-              value={notifyChannel}
-              onChange={setNotifyChannel}
+            <FieldLabel>{t("console.signals.fields.minActionValue")}</FieldLabel>
+            <NumberInput
+              value={minActionValue}
+              onChange={setMinActionValue}
+              min={0}
+              step={500}
             />
           </div>
-          <div className="flex flex-wrap items-center gap-6">
-            <label className="flex items-center gap-2 text-xs font-mono text-terminal-text cursor-pointer">
-              <input
-                type="checkbox"
-                checked={mock}
-                onChange={(e) => setMock(e.target.checked)}
-                className="accent-terminal-green"
-              />
-              {t("signals.mockMode")}
-            </label>
-            <label className="flex items-center gap-2 text-xs font-mono text-terminal-text cursor-pointer">
-              <input
-                type="checkbox"
-                checked={dryRun}
-                onChange={(e) => setDryRun(e.target.checked)}
-                className="accent-terminal-green"
-              />
-              {t("signals.dryRun")}
-            </label>
-            <label className="flex items-center gap-2 text-xs font-mono text-terminal-text cursor-pointer">
-              <input
-                type="checkbox"
-                checked={skipUpdate}
-                onChange={(e) => setSkipUpdate(e.target.checked)}
-                className="accent-terminal-green"
-              />
-              {t("signals.skipUpdate")}
-            </label>
-            <label className="flex items-center gap-2 text-xs font-mono text-terminal-text cursor-pointer">
-              <input
-                type="checkbox"
-                checked={force}
-                onChange={(e) => setForce(e.target.checked)}
-                className="accent-terminal-green"
-              />
-              {t("signals.forceRun")}
-            </label>
-          </div>
-          <button
-            onClick={handleRun}
-            className="px-3 py-1.5 text-xs font-mono border border-terminal-green text-terminal-green hover:bg-terminal-green-glow transition-colors rounded-sm"
-          >
-            {t("signals.runRebalance")}
+        </div>
+        <div>
+          <FieldLabel>{t("console.signals.fields.notifyChannel")}</FieldLabel>
+          <Select options={REBALANCE_CHANNELS} value={notifyChannel} onChange={setNotifyChannel} />
+        </div>
+        <div className="flex flex-wrap gap-4">
+          <Toggle
+            checked={dryRun}
+            onChange={(checked) => {
+              setDryRun(checked);
+              if (checked) setConfirmSend(false);
+            }}
+            label={t("console.signals.fields.dryRun")}
+          />
+          <Toggle checked={skipUpdate} onChange={setSkipUpdate} label={t("console.signals.fields.skipUpdate")} />
+          <Toggle checked={force} onChange={setForce} label={t("console.signals.fields.force")} />
+          {!dryRun && (
+            <Toggle
+              checked={confirmSend}
+              onChange={setConfirmSend}
+              label={t("console.signals.fields.confirmSend")}
+              danger
+            />
+          )}
+        </div>
+        <ActionButton
+          onClick={handleClick}
+          disabled={!config || (!dryRun && !confirmSend)}
+          danger={!dryRun}
+          testId="signals-rebalance-submit"
+        >
+          {dryRun ? t("console.signals.actions.preview") : t("console.signals.actions.rebalanceReal")}
+        </ActionButton>
+        {error && <p className="text-xs font-mono text-terminal-red">{error}</p>}
+        <PreviewBlock result={result} />
+      </div>
+      <ConfirmDialog
+        open={!!pendingRealParams}
+        titleKey={t("console.signals.confirm.rebalanceTitle")}
+        impactSummary={<p>{t("console.signals.confirm.rebalanceImpact")}</p>}
+        confirmLabelKey={t("console.signals.confirm.confirmRealSend")}
+        destructive
+        onCancel={() => setPendingRealParams(null)}
+        onConfirm={() => {
+          const payload = pendingRealParams;
+          setPendingRealParams(null);
+          if (payload) submit(payload).catch((err) => setError(String(err)));
+        }}
+      />
+    </Card>
+  );
+}
+
+function NotifyTestAction() {
+  const { t } = useTranslation();
+  const [channel, setChannel] = useState("bark");
+  const [message, setMessage] = useState("Dashboard notification test");
+  const [dryRun, setDryRun] = useState(true);
+  const [confirmSend, setConfirmSend] = useState(false);
+  const [pendingRealParams, setPendingRealParams] = useState<NotifyTestParams | null>(null);
+  const [result, setResult] = useState<TaskTrigger<Record<string, unknown>> | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const { trackTask } = useTaskTracking({ pageKey: "signals", taskTypeFilter: TASK_TYPES });
+
+  const params = (): NotifyTestParams =>
+    NotifyTestSchema.parse({
+      channel,
+      message,
+      dry_run: dryRun,
+      confirm_send: dryRun ? false : confirmSend,
+    });
+
+  const submit = async (payload: NotifyTestParams) => {
+    const response = await triggerNotifyTest(payload);
+    setResult(response);
+    trackTask(response.task_id);
+  };
+
+  const handleClick = () => {
+    setError(null);
+    try {
+      const payload = params();
+      if (!payload.dry_run) {
+        setPendingRealParams(payload);
+        return;
+      }
+      submit(payload).catch((err) => setError(String(err)));
+    } catch (err) {
+      setError(String(err));
+    }
+  };
+
+  return (
+    <Card title={t("console.signals.notify.title")} accent="red">
+      <div className="space-y-4">
+        <div>
+          <FieldLabel>{t("console.signals.fields.notifyChannel")}</FieldLabel>
+          <Select options={NOTIFY_CHANNELS} value={channel} onChange={setChannel} />
+        </div>
+        <div>
+          <FieldLabel>{t("console.signals.fields.message")}</FieldLabel>
+          <TextArea value={message} onChange={setMessage} rows={4} />
+        </div>
+        <div className="flex flex-wrap gap-4">
+          <Toggle
+            checked={dryRun}
+            onChange={(checked) => {
+              setDryRun(checked);
+              if (checked) setConfirmSend(false);
+            }}
+            label={t("console.signals.fields.dryRun")}
+          />
+          {!dryRun && (
+            <Toggle
+              checked={confirmSend}
+              onChange={setConfirmSend}
+              label={t("console.signals.fields.confirmSend")}
+              danger
+            />
+          )}
+        </div>
+        <ActionButton
+          onClick={handleClick}
+          disabled={!message.trim() || (!dryRun && !confirmSend)}
+          danger={!dryRun}
+          testId="signals-notify-submit"
+        >
+          {dryRun ? t("console.signals.actions.preview") : t("console.signals.actions.notifyReal")}
+        </ActionButton>
+        {error && <p className="text-xs font-mono text-terminal-red">{error}</p>}
+        <PreviewBlock result={result} />
+      </div>
+      <ConfirmDialog
+        open={!!pendingRealParams}
+        titleKey={t("console.signals.confirm.notifyTitle")}
+        impactSummary={<p>{t("console.signals.confirm.notifyImpact")}</p>}
+        confirmLabelKey={t("console.signals.confirm.confirmRealSend")}
+        destructive
+        onCancel={() => setPendingRealParams(null)}
+        onConfirm={() => {
+          const payload = pendingRealParams;
+          setPendingRealParams(null);
+          if (payload) submit(payload).catch((err) => setError(String(err)));
+        }}
+      />
+    </Card>
+  );
+}
+
+function HistoryTab() {
+  const { t } = useTranslation();
+  const [files, setFiles] = useState<SignalFile[]>([]);
+  const { tasks, refresh } = useTaskTracking({ pageKey: "signals", taskTypeFilter: TASK_TYPES });
+
+  useEffect(() => {
+    fetchSignalHistory()
+      .then(setFiles)
+      .catch(() => setFiles([]));
+  }, []);
+
+  return (
+    <div className="space-y-4">
+      <Card
+        title={t("console.signals.history.tasks")}
+        actions={
+          <button type="button" onClick={refresh} className="text-xs text-terminal-green">
+            {t("console.signals.actions.refresh")}
           </button>
+        }
+      >
+        <div className="overflow-auto">
+          <table className="w-full text-left text-xs">
+            <thead className="text-terminal-text-dim">
+              <tr>
+                <th className="px-2 py-2">{t("console.signals.history.task")}</th>
+                <th className="px-2 py-2">{t("console.signals.history.created")}</th>
+                <th className="px-2 py-2">{t("console.signals.history.realSend")}</th>
+                <th className="px-2 py-2">{t("console.signals.history.results")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {tasks.map((task) => (
+                <tr key={task.task_id} className="border-t border-terminal-border-dim">
+                  <td className="px-2 py-2"><TaskChip task={task} /></td>
+                  <td className="px-2 py-2 font-mono text-terminal-text-dim">{task.created_at}</td>
+                  <td className="px-2 py-2">{realSendLabel(task)}</td>
+                  <td className="px-2 py-2 font-mono text-terminal-text-dim">
+                    {task.result_paths?.join(", ") || "-"}
+                  </td>
+                </tr>
+              ))}
+              {tasks.length === 0 && (
+                <tr>
+                  <td className="px-2 py-4 text-terminal-text-dim" colSpan={4}>
+                    {t("console.signals.history.noTasks")}
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
         </div>
       </Card>
-      <TaskStatus taskId={taskId} />
+      <SignalFileList files={files} />
     </div>
   );
 }
 
-// ─── Regime Tab ────────────────────────────────────────────────────────
-
-function RegimeTab() {
-  const { t } = useTranslation();
-  const [regime, setRegime] = useState<RegimeInfo | null>(null);
-
-  useEffect(() => {
-    get<RegimeInfo>("/signals/regime")
-      .then(setRegime)
-      .catch(() => {});
-  }, []);
-
-  const regimeLabels: Record<number, string> = {
-    0: "Calm Bull",
-    1: "Calm Bear",
-    2: "Volatile Bull",
-    3: "Volatile Bear",
-  };
-
-  const regimeColors: Record<number, string> = {
-    0: "bg-terminal-green-glow text-terminal-green border-terminal-green",
-    1: "bg-terminal-red-glow text-terminal-red border-terminal-red",
-    2: "bg-terminal-amber-glow text-terminal-amber border-terminal-amber",
-    3: "bg-terminal-cyan-glow text-terminal-cyan border-terminal-cyan",
-  };
-
-  return (
-    <Card title={t("signals.regime")}>
-      <div className="space-y-4">
-        {regime ? (
-          <>
-            <div className="flex items-center gap-4">
-              <Badge variant={regime.enabled ? "success" : "neutral"}>
-                {regime.enabled
-                  ? t("common.enabled")
-                  : t("common.disabled")}
-              </Badge>
-              {regime.enabled && regime.regime != null && (
-                <span
-                  className={`px-3 py-1 rounded-sm border text-xs font-mono font-semibold ${
-                    regimeColors[regime.regime] ?? "bg-terminal-raised text-terminal-text-dim border-terminal-border"
-                  }`}
-                >
-                  {regimeLabels[regime.regime] ?? `Regime ${regime.regime}`}
-                </span>
-              )}
-            </div>
-            {regime.error && (
-              <p className="text-terminal-red text-xs font-mono">{regime.error}</p>
-            )}
-            {regime.enabled && regime.label === "requires_price_data" && (
-              <p className="text-terminal-text-dim text-xs font-mono">
-                Regime detection requires real-time price data. Run during
-                market hours or with cached data.
-              </p>
-            )}
-          </>
-        ) : (
-          <Skeleton className="h-6 w-48" />
-        )}
-      </div>
-    </Card>
-  );
+function realSendLabel(task: TaskState) {
+  if (task.task_type === "rebalance") return "yes";
+  if (task.task_type === "rebalance_dry_run") return "no";
+  return "-";
 }
 
-// ─── Notification Tab ──────────────────────────────────────────────────
-
-function NotificationTab() {
+function SignalFileList({ files }: { files: SignalFile[] }) {
   const { t } = useTranslation();
-  const [title, setTitle] = useState("");
-  const [content, setContent] = useState("");
-  const [channel, setChannel] = useState("");
-  const [dryRun, setDryRun] = useState(true);
-  const [confirmSend, setConfirmSend] = useState(false);
-  const [sending, setSending] = useState(false);
-  const [result, setResult] = useState<{ success: boolean; dry_run?: boolean; sent?: boolean; channels?: string[]; error?: string } | null>(null);
-
-  const handleSend = async () => {
-    setSending(true);
-    setResult(null);
-    try {
-      const res = await post<{ success: boolean; error?: string }>(
-        "/signals/notify-test",
-        {
-          title,
-          content,
-          channel: channel || undefined,
-          dry_run: dryRun,
-          confirm_send: confirmSend,
-        }
-      );
-      setResult(res);
-    } catch (err) {
-      setResult({ success: false, error: String(err) });
-    } finally {
-      setSending(false);
-    }
-  };
-
   return (
-    <Card title={t("signals.notificationTab")}>
-      <div className="space-y-4 max-w-lg">
-        <p className="text-terminal-text-dim text-xs font-mono">{t("signals.notifNote")}</p>
-        <div>
-          <p className="text-xs font-mono text-terminal-text-dim uppercase mb-1">
-            {t("signals.notifTitle")}
-          </p>
-          <input
-            type="text"
-            value={title}
-            onChange={(e) => setTitle(e.target.value)}
-            placeholder={t("signals.notifTitlePlaceholder")}
-            className="w-full px-3 py-2 bg-terminal-surface border border-terminal-border rounded-sm text-xs font-mono text-terminal-text placeholder:text-terminal-text-dim focus:outline-none focus:border-terminal-green hover:border-terminal-text-dim transition-colors"
-          />
-        </div>
-        <div>
-          <p className="text-xs font-mono text-terminal-text-dim uppercase mb-1">
-            {t("signals.notifContent")}
-          </p>
-          <textarea
-            value={content}
-            onChange={(e) => setContent(e.target.value)}
-            rows={5}
-            className="w-full px-3 py-2 bg-terminal-surface border border-terminal-border rounded-sm text-xs font-mono text-terminal-text placeholder:text-terminal-text-dim focus:outline-none focus:border-terminal-green hover:border-terminal-text-dim transition-colors"
-            placeholder={t("signals.notifPlaceholder")}
-          />
-        </div>
-        <div>
-          <p className="text-xs font-mono text-terminal-text-dim uppercase mb-1">
-            {t("signals.notifyChannel")}
-          </p>
-          <Select
-            options={[
-              { value: "", label: t("signals.allChannels") },
-              { value: "bark", label: "Bark" },
-              { value: "pushplus", label: "PushPlus" },
-              { value: "dingtalk", label: "DingTalk" },
-              { value: "serverchan", label: "ServerChan" },
-              { value: "wechat_mp", label: "WeChat MP" },
-            ]}
-            value={channel}
-            onChange={setChannel}
-          />
-        </div>
-        <div className="flex flex-wrap gap-4">
-          <label className="flex items-center gap-2 text-xs font-mono text-terminal-text cursor-pointer">
-            <input
-              type="checkbox"
-              checked={dryRun}
-              onChange={(e) => {
-                setDryRun(e.target.checked);
-                if (e.target.checked) setConfirmSend(false);
-              }}
-              className="accent-terminal-green"
-            />
-            {t("signals.dryRun")}
-          </label>
-          {!dryRun && (
-            <label className="flex items-center gap-2 text-xs font-mono text-terminal-red cursor-pointer">
-              <input
-                type="checkbox"
-                checked={confirmSend}
-                onChange={(e) => setConfirmSend(e.target.checked)}
-                className="accent-terminal-red"
-              />
-              {t("signals.confirmRealNotify")}
-            </label>
-          )}
-        </div>
-        <button
-          onClick={handleSend}
-          disabled={sending || !title || (!dryRun && !confirmSend)}
-          className="px-3 py-1.5 text-xs font-mono border border-terminal-green text-terminal-green hover:bg-terminal-green-glow transition-colors rounded-sm disabled:opacity-30"
-        >
-          {sending ? t("common.sending") : dryRun ? t("signals.previewTest") : t("signals.sendTest")}
-        </button>
-        {result && (
-          <div
-            className={`px-4 py-3 rounded-sm text-xs font-mono border ${
-              result.success
-                ? "bg-terminal-green-glow text-terminal-green border-terminal-green"
-                : "bg-terminal-red-glow text-terminal-red border-terminal-red"
-            }`}
-          >
-            {result.success
-              ? result.dry_run
-                ? `${t("signals.previewOk")} ${result.channels?.join(", ") || t("common.noData")}`
-                : t("common.sent")
-              : `Error: ${result.error}`}
-          </div>
-        )}
-      </div>
-    </Card>
-  );
-}
-
-// ─── History (inline) ──────────────────────────────────────────────────
-
-function HistorySection() {
-  const { t } = useTranslation();
-  const [files, setFiles] = useState<SignalFile[]>([]);
-  const [selected, setSelected] = useState<string | null>(null);
-  const [content, setContent] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    get<SignalFile[]>("/signals/history").then(setFiles);
-  }, []);
-
-  const loadFile = async (filename: string) => {
-    setSelected(filename);
-    setLoading(true);
-    try {
-      const res = await get<SignalContent>(
-        `/signals/history/${filename}`
-      );
-      setContent(res.content);
-    } catch {
-      setContent(null);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  return (
-    <Card title={t("signals.historyTab")}>
+    <Card title={t("console.signals.history.files")}>
       {files.length === 0 ? (
-        <p className="text-terminal-text-dim text-xs font-mono">{t("signals.noHistory")}</p>
+        <p className="text-xs font-mono text-terminal-text-dim">
+          {t("console.signals.history.noFiles")}
+        </p>
       ) : (
-        <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
-          <div className="lg:col-span-1 space-y-1 max-h-[500px] overflow-y-auto">
-            {files.map((f) => (
-              <button
-                key={f.filename}
-                onClick={() => loadFile(f.filename)}
-                className={`w-full text-left px-3 py-2 rounded-sm text-xs font-mono transition-colors ${
-                  selected === f.filename
-                    ? "bg-terminal-green-glow text-terminal-green"
-                    : "text-terminal-text-dim hover:bg-terminal-raised hover:text-terminal-text"
-                }`}
-              >
-                <span className="block truncate">{f.filename}</span>
-                <span className="text-terminal-text-dim">{f.size_kb} KB</span>
-              </button>
-            ))}
-          </div>
-          <div className="lg:col-span-2">
-            {loading && (
-              <div className="space-y-2">
-                <Skeleton className="h-4 w-3/4" />
-                <Skeleton className="h-4 w-full" />
-                <Skeleton className="h-4 w-5/6" />
-                <Skeleton className="h-4 w-2/3" />
-                <Skeleton className="h-4 w-full" />
-              </div>
-            )}
-            {!loading && !selected && (
-              <p className="text-terminal-text-dim text-xs font-mono">
-                {t("common.selectFile")}
-              </p>
-            )}
-            {!loading && content && (
-              <pre className="bg-terminal-surface border border-terminal-border rounded-sm p-4 text-xs font-mono text-terminal-text overflow-auto max-h-[500px] whitespace-pre-wrap">
-                {content}
-              </pre>
-            )}
-          </div>
+        <div className="space-y-2">
+          {files.map((file) => (
+            <div
+              key={file.filename}
+              className="flex items-center justify-between rounded-sm border border-terminal-border-dim px-3 py-2 text-xs"
+            >
+              <span className="font-mono text-terminal-green">{file.filename}</span>
+              <span className="text-terminal-text-dim">
+                {file.size_kb} KB - {new Date(file.modified).toLocaleString()}
+              </span>
+            </div>
+          ))}
         </div>
       )}
     </Card>
   );
 }
 
-// ─── Main Page ─────────────────────────────────────────────────────────
+function InspectTab() {
+  return (
+    <div className="grid grid-cols-1 gap-4 xl:grid-cols-2">
+      <RegimeCard />
+      <SignalFileInspector />
+    </div>
+  );
+}
+
+function RegimeCard() {
+  const { t } = useTranslation();
+  const [regime, setRegime] = useState<RegimeInfo | null>(null);
+
+  useEffect(() => {
+    fetchRegime()
+      .then(setRegime)
+      .catch((err) => setRegime({ enabled: false, regime: null, label: null, error: String(err) }));
+  }, []);
+
+  return (
+    <Card title={t("console.signals.inspect.regime")}>
+      {regime ? (
+        <div className="space-y-2 text-xs font-mono">
+          <p className={regime.enabled ? "text-terminal-green" : "text-terminal-text-dim"}>
+            {regime.enabled ? t("console.signals.inspect.enabled") : t("console.signals.inspect.disabled")}
+          </p>
+          <p className="text-terminal-text">{regime.label ?? `Regime ${regime.regime ?? "-"}`}</p>
+          {regime.error && <p className="text-terminal-red">{regime.error}</p>}
+        </div>
+      ) : (
+        <Skeleton className="h-6 w-48" />
+      )}
+    </Card>
+  );
+}
+
+function SignalFileInspector() {
+  const { t } = useTranslation();
+  const [files, setFiles] = useState<SignalFile[]>([]);
+  const [selected, setSelected] = useState("");
+  const [content, setContent] = useState("");
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    fetchSignalHistory()
+      .then((items) => {
+        setFiles(items);
+        if (items.length > 0) setSelected(items[0].filename);
+      })
+      .catch(() => setFiles([]));
+  }, []);
+
+  useEffect(() => {
+    if (!selected) return;
+    setLoading(true);
+    fetchSignalContent(selected)
+      .then((res) => setContent(res.content))
+      .catch(() => setContent(""))
+      .finally(() => setLoading(false));
+  }, [selected]);
+
+  return (
+    <Card title={t("console.signals.inspect.file")}>
+      <div className="space-y-3">
+        <Select
+          options={files.map((file) => ({ value: file.filename, label: file.filename }))}
+          value={selected}
+          onChange={setSelected}
+        />
+        {loading && <Skeleton className="h-32 w-full" />}
+        {!loading && content && (
+          <pre className="max-h-[460px] overflow-auto whitespace-pre-wrap rounded-sm border border-terminal-border bg-terminal-surface p-4 text-xs font-mono text-terminal-text">
+            {content}
+          </pre>
+        )}
+        {!loading && !content && (
+          <p className="text-xs font-mono text-terminal-text-dim">
+            {t("console.signals.inspect.noFile")}
+          </p>
+        )}
+      </div>
+    </Card>
+  );
+}
+
+function OverviewTab() {
+  const { t } = useTranslation();
+  const [files, setFiles] = useState<SignalFile[]>([]);
+
+  useEffect(() => {
+    fetchSignalHistory()
+      .then(setFiles)
+      .catch(() => setFiles([]));
+  }, []);
+
+  const recentCount = useMemo(() => {
+    const cutoff = Date.now() - 7 * 24 * 60 * 60 * 1000;
+    return files.filter((file) => new Date(file.modified).getTime() >= cutoff).length;
+  }, [files]);
+
+  return (
+    <div className="grid grid-cols-1 gap-4 xl:grid-cols-3">
+      <Card title={t("console.signals.overview.recentSignals")} accent="green">
+        <p className="font-mono text-3xl text-terminal-text-bright">{recentCount}</p>
+      </Card>
+      <Card title={t("console.signals.overview.totalFiles")}>
+        <p className="font-mono text-3xl text-terminal-text-bright">{files.length}</p>
+      </Card>
+      <RegimeCard />
+    </div>
+  );
+}
 
 export function SignalsPage() {
   const { t } = useTranslation();
-  const [activeTab, setActiveTab] = useState("generate");
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-sm font-mono font-semibold text-terminal-text-bright uppercase tracking-wider">
-          {t("signals.title")}
-        </h1>
-        <Tabs
-          tabs={SIGNALS_TABS}
-          activeKey={activeTab}
-          onChange={setActiveTab}
-        />
-      </div>
-
-      {activeTab === "generate" && <GenerateTab />}
-      {activeTab === "daily" && <DailyTab />}
-      {activeTab === "rebalance" && <RebalanceTab />}
-      {activeTab === "regime" && <RegimeTab />}
-      {activeTab === "notification" && <NotificationTab />}
-
-      {/* History always visible below tabs */}
-      <HistorySection />
-    </div>
+    <ConsolePageLayout
+      pageKey="signals"
+      titleKey={t("console.signals.title")}
+      taskTypeFilter={TASK_TYPES}
+      tabs={{
+        overview: <OverviewTab />,
+        execute: <ExecuteTab />,
+        history: <HistoryTab />,
+        inspect: <InspectTab />,
+      }}
+    />
   );
 }

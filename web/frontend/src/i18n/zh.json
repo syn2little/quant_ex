@@ -394,6 +394,66 @@
     },
     "models": {},
     "backtest": {},
-    "signals": {}
+    "signals": {
+      "title": "信号控制台",
+      "generate": {
+        "title": "每日信号"
+      },
+      "rebalance": {
+        "title": "调仓"
+      },
+      "notify": {
+        "title": "通知测试"
+      },
+      "fields": {
+        "modelPath": "模型",
+        "configOverride": "配置覆盖",
+        "config": "配置",
+        "positions": "当前持仓",
+        "positionDate": "持仓日期",
+        "minActionValue": "最小调仓金额",
+        "notifyChannel": "通知渠道",
+        "message": "消息",
+        "dryRun": "演练",
+        "skipUpdate": "跳过数据更新",
+        "force": "强制执行",
+        "confirmSend": "确认真实发送"
+      },
+      "actions": {
+        "preview": "预览",
+        "submit": "提交",
+        "rebalanceReal": "真实调仓",
+        "notifyReal": "发送真实测试",
+        "refresh": "刷新"
+      },
+      "confirm": {
+        "rebalanceTitle": "确认真实调仓",
+        "rebalanceImpact": "这会以 dry_run=false 运行调仓路径,并可能发送真实通知。",
+        "notifyTitle": "确认真实通知测试",
+        "notifyImpact": "这会通过所选渠道发送一条真实测试通知。",
+        "confirmRealSend": "确认真实发送"
+      },
+      "history": {
+        "tasks": "任务历史",
+        "task": "任务",
+        "created": "创建时间",
+        "realSend": "是否真发",
+        "results": "结果路径",
+        "files": "信号文件",
+        "noTasks": "暂无信号任务。",
+        "noFiles": "未找到信号文件。"
+      },
+      "inspect": {
+        "regime": "市场状态",
+        "file": "信号文件",
+        "enabled": "已启用",
+        "disabled": "未启用",
+        "noFile": "未选择信号文件。"
+      },
+      "overview": {
+        "recentSignals": "近 7 天信号数",
+        "totalFiles": "信号文件总数"
+      }
+    }
   }
 }
