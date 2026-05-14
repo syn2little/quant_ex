@@ -15,13 +15,16 @@ router = APIRouter()
 
 
 class EvaluateRequest(BaseModel):
-    name: str
+    name: Optional[str] = None
+    factor: Optional[str] = None
+    dry_run: bool = True
 
 
 class MineRequest(BaseModel):
     min_ic: float = 0.03
     min_icir: float = 0.4
     top_n: int = 30
+    dry_run: bool = True
 
 
 @router.get("")
@@ -61,17 +64,58 @@ async def factor_library():
 @router.post("/evaluate")
 async def evaluate_factor(req: EvaluateRequest):
     tm = get_task_manager()
+    factor_name = req.factor or req.name
+    if not factor_name:
+        raise HTTPException(status_code=422, detail="factor is required")
+
+    if req.dry_run:
+        preview = {
+            "factor": factor_name,
+            "estimated_minutes": 3,
+            "writes_files": False,
+        }
+        task_id = await tm.start_sync_task(
+            "factor_eval_dry_run",
+            lambda: preview,
+            page_key="factors",
+            action_key="factors.evaluate",
+        )
+        return {"task_id": task_id, "dry_run": True, "preview": preview}
 
     def _eval():
-        return {"factor": req.name, "message": "evaluation not yet implemented in web mode"}
+        return {
+            "factor": factor_name,
+            "message": "evaluation not yet implemented in web mode",
+            "result_paths": [],
+        }
 
-    task_id = await tm.start_sync_task("factor_eval", _eval)
-    return {"task_id": task_id}
+    task_id = await tm.start_sync_task(
+        "factor_eval",
+        _eval,
+        page_key="factors",
+        action_key="factors.evaluate",
+    )
+    return {"task_id": task_id, "dry_run": False, "preview": None}
 
 
 @router.post("/mine")
 async def mine_factors(req: MineRequest):
     tm = get_task_manager()
+    if req.dry_run:
+        preview = {
+            "min_ic": req.min_ic,
+            "min_icir": req.min_icir,
+            "top_n": req.top_n,
+            "estimated_minutes": 10,
+            "writes_files": False,
+        }
+        task_id = await tm.start_sync_task(
+            "factor_mine_dry_run",
+            lambda: preview,
+            page_key="factors",
+            action_key="factors.mine",
+        )
+        return {"task_id": task_id, "dry_run": True, "preview": preview}
 
     def _mine():
         import subprocess, sys
@@ -82,10 +126,15 @@ async def mine_factors(req: MineRequest):
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         if result.returncode != 0:
             raise RuntimeError(f"Factor mining failed (exit {result.returncode}): {result.stderr[-500:]}")
-        return {"status": "completed"}
+        return {"status": "completed", "result_paths": []}
 
-    task_id = await tm.start_sync_task("factor_mine", _mine)
-    return {"task_id": task_id}
+    task_id = await tm.start_sync_task(
+        "factor_mine",
+        _mine,
+        page_key="factors",
+        action_key="factors.mine",
+    )
+    return {"task_id": task_id, "dry_run": False, "preview": None}
 
 
 @router.get("/values")

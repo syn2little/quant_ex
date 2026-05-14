@@ -639,7 +639,7 @@ git commit -m "feat(web/api): backtest grid/wfv/compare return unified envelope"
 - Modify: `web/api/routers/signals.py`, `web/api/routers/factors.py`
 - Test: `test/test_web_console_contract.py`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 ```python
 def test_signals_generate_returns_unified_envelope_for_dry_run():
@@ -679,7 +679,7 @@ def test_factors_evaluate_returns_unified_envelope_for_dry_run():
     assert body["dry_run"] is True
 ```
 
-- [ ] **Step 2: 跑测试**
+- [x] **Step 2: 跑测试**
 
 ```bash
 ./.venv/bin/python -m pytest test/test_web_console_contract.py -v
@@ -687,7 +687,7 @@ def test_factors_evaluate_returns_unified_envelope_for_dry_run():
 
 Expected: 部分 PASS(已存在 dry-run 的)+ 部分 FAIL。
 
-- [ ] **Step 3: 改造 `signals.py` 与 `factors.py`**
+- [x] **Step 3: 改造 `signals.py` 与 `factors.py`**
 
 对每个触发端点确保返回 `{task_id, dry_run, preview}`,并在 task 创建时填入 `page_key + action_key`(`signals.generate`、`signals.rebalance`、`signals.notify_test`、`factors.evaluate`、`factors.mine`)。
 
@@ -702,7 +702,7 @@ Expected: 部分 PASS(已存在 dry-run 的)+ 部分 FAIL。
 }
 ```
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
 
 ```bash
 ./.venv/bin/python -m pytest test/test_web_console_contract.py -v
@@ -711,7 +711,7 @@ Expected: 部分 PASS(已存在 dry-run 的)+ 部分 FAIL。
 
 Expected: 全 PASS。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/api/routers/signals.py web/api/routers/factors.py test/test_web_console_contract.py

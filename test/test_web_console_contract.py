@@ -112,3 +112,40 @@ def test_backtest_wfv_returns_unified_envelope_for_dry_run():
     body = response.json()
     assert body["dry_run"] is True
     assert body["preview"]["rank_metric"] == "information_ratio"
+
+
+def test_signals_generate_returns_unified_envelope_for_dry_run():
+    client = TestClient(create_app())
+    response = client.post("/api/signals/generate", json={
+        "model_path": "models/dummy.pkl",
+        "dry_run": True,
+    })
+    assert response.status_code == 200
+    body = response.json()
+    assert body["dry_run"] is True
+    assert body["preview"] is not None
+
+
+def test_signals_rebalance_dry_run_preview_includes_diff():
+    client = TestClient(create_app())
+    response = client.post("/api/signals/rebalance", json={
+        "config": "config/daily_csi1000.yaml",
+        "dry_run": True,
+        "skip_update": True,
+    })
+    assert response.status_code == 200
+    body = response.json()
+    assert body["dry_run"] is True
+    assert "diff" in body["preview"]
+
+
+def test_factors_evaluate_returns_unified_envelope_for_dry_run():
+    client = TestClient(create_app())
+    response = client.post("/api/factors/evaluate", json={
+        "factor": "technical",
+        "dry_run": True,
+    })
+    assert response.status_code == 200
+    body = response.json()
+    assert "task_id" in body
+    assert body["dry_run"] is True
