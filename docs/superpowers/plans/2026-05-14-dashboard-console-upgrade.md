@@ -803,7 +803,7 @@ git commit -m "feat(web/api): wrap run_update_qlib_data behind POST /data/update
 **Files:**
 - Create: `web/frontend/src/api/tasks.ts`
 
-- [ ] **Step 1: 检查既有 api 客户端模式**
+- [x] **Step 1: 检查既有 api 客户端模式**
 
 ```bash
 ls web/frontend/src/api/
@@ -812,7 +812,7 @@ cat web/frontend/src/api/types.ts | head -30
 
 Expected: 列出现有 api 文件 + types 风格,后续保持一致。
 
-- [ ] **Step 2: 写 `web/frontend/src/api/tasks.ts`**
+- [x] **Step 2: 写 `web/frontend/src/api/tasks.ts`**
 
 ```typescript
 import type { TaskState } from "./types";
@@ -876,7 +876,7 @@ export async function listTasks(): Promise<TaskState[]> {
 }
 ```
 
-- [ ] **Step 3: TypeScript 编译检查**
+- [x] **Step 3: TypeScript 编译检查**
 
 ```bash
 cd web/frontend && npx tsc --noEmit
@@ -884,7 +884,7 @@ cd web/frontend && npx tsc --noEmit
 
 Expected: 无错误。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add web/frontend/src/api/tasks.ts web/frontend/src/api/types.ts

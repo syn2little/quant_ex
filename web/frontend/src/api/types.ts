@@ -131,6 +131,20 @@ export interface TaskInfo {
   result?: unknown;
 }
 
+export type TaskStatus = "pending" | "running" | "done" | "failed" | "cancelled";
+
+export interface TaskState {
+  task_id: string;
+  task_type: string;
+  status: TaskStatus;
+  created_at: string;
+  result: unknown;
+  error: string | null;
+  page_key: string | null;
+  action_key: string | null;
+  result_paths: string[];
+}
+
 // --- Agent Runs ---
 export interface AgentRunSummary {
   run_id: string;
