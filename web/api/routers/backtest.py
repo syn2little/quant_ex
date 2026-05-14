@@ -29,11 +29,22 @@ def _safe_path(base_dir: Path, filename: str) -> Path:
 class GridSearchRequest(BaseModel):
     model_path: str
     topk: list[int] = [5, 10, 15, 20]
+    topk_list: Optional[list[int]] = None
     n_drop: list[int] = [1, 3, 5]
+    n_drop_list: Optional[list[int]] = None
     hold_thresh: list[int] = [3, 5, 10]
+    hold_thresh_list: Optional[list[int]] = None
     start: Optional[str] = None
+    start_date: Optional[str] = None
     end: Optional[str] = None
+    end_date: Optional[str] = None
     market: str = "csi300"
+    benchmark: Optional[str] = None
+    deal_price: str = "close"
+    open_cost: float = 0.0005
+    close_cost: float = 0.0015
+    min_cost: float = 5.0
+    slippage: float = 0.0
     multi_seed: bool = False
     optimize: bool = False
     n_iters: int = 3
@@ -43,6 +54,19 @@ class GridSearchRequest(BaseModel):
     slippage_sensitivity: bool = False
     markets: Optional[list[str]] = None
     explore_markets: bool = False
+    dry_run: bool = True
+
+
+def _grid_topk(req: GridSearchRequest) -> list[int]:
+    return req.topk_list or req.topk
+
+
+def _grid_n_drop(req: GridSearchRequest) -> list[int]:
+    return req.n_drop_list or req.n_drop
+
+
+def _grid_hold_thresh(req: GridSearchRequest) -> list[int]:
+    return req.hold_thresh_list or req.hold_thresh
 
 
 def _build_grid_cmd(req: GridSearchRequest) -> list[str]:
@@ -52,18 +76,20 @@ def _build_grid_cmd(req: GridSearchRequest) -> list[str]:
         "--model-path",
         req.model_path,
         "--topk",
-        ",".join(str(x) for x in req.topk),
+        ",".join(str(x) for x in _grid_topk(req)),
         "--n-drop",
-        ",".join(str(x) for x in req.n_drop),
+        ",".join(str(x) for x in _grid_n_drop(req)),
         "--hold-thresh",
-        ",".join(str(x) for x in req.hold_thresh),
+        ",".join(str(x) for x in _grid_hold_thresh(req)),
         "--market",
         req.market,
     ]
-    if req.start:
-        argv.extend(["--start", req.start])
-    if req.end:
-        argv.extend(["--end", req.end])
+    start = req.start_date or req.start
+    end = req.end_date or req.end
+    if start:
+        argv.extend(["--start", start])
+    if end:
+        argv.extend(["--end", end])
     if req.multi_seed:
         argv.append("--seeds")
     if req.optimize:
@@ -88,6 +114,28 @@ def _build_grid_cmd(req: GridSearchRequest) -> list[str]:
 @router.post("/grid")
 async def start_grid_search(req: GridSearchRequest):
     tm = get_task_manager()
+    topk = _grid_topk(req)
+    n_drop = _grid_n_drop(req)
+    hold_thresh = _grid_hold_thresh(req)
+    candidate_count = len(topk) * len(n_drop) * len(hold_thresh)
+    if req.dry_run:
+        preview = {
+            "model_path": req.model_path,
+            "market": req.market,
+            "benchmark": req.benchmark,
+            "candidate_count": candidate_count,
+            "estimated_minutes": round(candidate_count * 0.5, 1),
+            "deal_price": req.deal_price,
+            "rank_metric": "information_ratio",
+            "warning": "candidate_count_gt_200" if candidate_count > 200 else None,
+        }
+        task_id = await tm.start_sync_task(
+            "grid_search_dry_run",
+            lambda: preview,
+            page_key="backtest",
+            action_key="backtest.grid",
+        )
+        return {"task_id": task_id, "dry_run": True, "preview": preview}
 
     def _grid():
         import subprocess
@@ -95,10 +143,16 @@ async def start_grid_search(req: GridSearchRequest):
         result = subprocess.run(argv, capture_output=True, text=True, timeout=600)
         if result.returncode != 0:
             raise RuntimeError(f"Grid search failed (exit {result.returncode}): {result.stderr[-500:]}")
-        return {"status": "completed"}
+        result_paths = [req.output_csv] if req.output_csv else []
+        return {"status": "completed", "result_paths": result_paths}
 
-    task_id = await tm.start_sync_task("grid_search", _grid)
-    return {"task_id": task_id}
+    task_id = await tm.start_sync_task(
+        "grid_search",
+        _grid,
+        page_key="backtest",
+        action_key="backtest.grid",
+    )
+    return {"task_id": task_id, "dry_run": False, "preview": None}
 
 
 @router.get("/grid/{task_id}/stream")
@@ -142,8 +196,14 @@ class WFVRequest(BaseModel):
     train_universes: list[str] = ["csi300"]
     eval_market: str = "csi300"
     topk: list[int] = [5, 15, 20]
+    topk_list: Optional[list[int]] = None
     n_drop: list[int] = [1, 3]
+    n_drop_list: Optional[list[int]] = None
     hold_thresh: list[int] = [5, 8, 10]
+    hold_thresh_list: Optional[list[int]] = None
+    rolling_window_days: int = 252
+    step_days: int = 63
+    rank_metric: str = "information_ratio"
     workers: int = 1
     seeds: bool = False
     run_id: Optional[str] = None
@@ -151,6 +211,19 @@ class WFVRequest(BaseModel):
     robust_weights: Optional[dict] = None
     folds_config: Optional[str] = None
     train_config: Optional[str] = None
+    dry_run: bool = True
+
+
+def _wfv_topk(req: WFVRequest) -> list[int]:
+    return req.topk_list or req.topk
+
+
+def _wfv_n_drop(req: WFVRequest) -> list[int]:
+    return req.n_drop_list or req.n_drop
+
+
+def _wfv_hold_thresh(req: WFVRequest) -> list[int]:
+    return req.hold_thresh_list or req.hold_thresh
 
 
 def _build_wfv_cmd(req: WFVRequest) -> list[str]:
@@ -162,11 +235,11 @@ def _build_wfv_cmd(req: WFVRequest) -> list[str]:
         "--eval-market",
         req.eval_market,
         "--topk",
-        ",".join(str(x) for x in req.topk),
+        ",".join(str(x) for x in _wfv_topk(req)),
         "--n-drop",
-        ",".join(str(x) for x in req.n_drop),
+        ",".join(str(x) for x in _wfv_n_drop(req)),
         "--hold-thresh",
-        ",".join(str(x) for x in req.hold_thresh),
+        ",".join(str(x) for x in _wfv_hold_thresh(req)),
         "--workers",
         str(req.workers),
     ]
@@ -187,7 +260,32 @@ def _build_wfv_cmd(req: WFVRequest) -> list[str]:
 
 @router.post("/walk-forward")
 async def start_wfv(req: WFVRequest):
+    if req.rank_metric != "information_ratio":
+        raise HTTPException(status_code=400, detail="rank_metric is locked to information_ratio")
     tm = get_task_manager()
+    topk = _wfv_topk(req)
+    n_drop = _wfv_n_drop(req)
+    hold_thresh = _wfv_hold_thresh(req)
+    candidate_count = len(topk) * len(n_drop) * len(hold_thresh)
+    window_count = max(1, req.rolling_window_days // max(1, req.step_days))
+
+    if req.dry_run:
+        preview = {
+            "train_universes": req.train_universes,
+            "eval_market": req.eval_market,
+            "candidate_count": candidate_count,
+            "window_count": window_count,
+            "total_runs": candidate_count * window_count * len(req.train_universes),
+            "estimated_minutes": candidate_count * window_count * max(1, len(req.train_universes)) * 20,
+            "rank_metric": "information_ratio",
+        }
+        task_id = await tm.start_sync_task(
+            "wfv_dry_run",
+            lambda: preview,
+            page_key="backtest",
+            action_key="backtest.walk_forward",
+        )
+        return {"task_id": task_id, "dry_run": True, "preview": preview}
 
     def _wfv():
         import subprocess
@@ -195,10 +293,15 @@ async def start_wfv(req: WFVRequest):
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         if result.returncode != 0:
             raise RuntimeError(f"Walk-forward validation failed (exit {result.returncode}): {result.stderr[-500:]}")
-        return {"status": "completed"}
+        return {"status": "completed", "result_paths": []}
 
-    task_id = await tm.start_sync_task("wfv", _wfv)
-    return {"task_id": task_id}
+    task_id = await tm.start_sync_task(
+        "wfv",
+        _wfv,
+        page_key="backtest",
+        action_key="backtest.walk_forward",
+    )
+    return {"task_id": task_id, "dry_run": False, "preview": None}
 
 
 @router.get("/results/{filename}/equity-curve")
@@ -229,12 +332,47 @@ async def get_drawdown(filename: str):
 
 
 class CompareRequest(BaseModel):
-    filenames: list[str]
+    filenames: list[str] = []
+    result_files: Optional[list[str]] = None
+    dry_run: bool = True
+
+
+def _compare_files(req: CompareRequest) -> list[str]:
+    return req.result_files or req.filenames
 
 
 @router.post("/compare")
 async def compare_backtest_runs(req: CompareRequest):
-    try:
-        return compare_runs(req.filenames)
-    except Exception as exc:
-        raise HTTPException(status_code=500, detail=str(exc))
+    files = _compare_files(req)
+    if len(files) < 2:
+        raise HTTPException(status_code=422, detail="At least two result files are required")
+    tm = get_task_manager()
+
+    if req.dry_run:
+        preview = {
+            "result_files": files,
+            "file_count": len(files),
+            "available_files": [f for f in files if _safe_path(BACKTEST_RESULTS_DIR, f).exists()],
+        }
+        task_id = await tm.start_sync_task(
+            "compare_dry_run",
+            lambda: preview,
+            page_key="backtest",
+            action_key="backtest.compare",
+        )
+        return {"task_id": task_id, "dry_run": True, "preview": preview}
+
+    def _compare() -> dict:
+        try:
+            result = compare_runs(files)
+        except Exception as exc:
+            raise RuntimeError(str(exc)) from exc
+        return {"result": result, "result_paths": []}
+
+    task_id = await tm.start_sync_task(
+        "compare",
+        _compare,
+        page_key="backtest",
+        action_key="backtest.compare",
+    )
+    return {"task_id": task_id, "dry_run": False, "preview": None}

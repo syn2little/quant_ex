@@ -526,7 +526,7 @@ git commit -m "feat(web/api): models train returns unified envelope + DELETE end
 - Modify: `web/api/routers/backtest.py`
 - Test: `test/test_web_console_contract.py`
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 追加:
 
@@ -567,7 +567,7 @@ def test_backtest_wfv_returns_unified_envelope_for_dry_run():
     assert body["preview"]["rank_metric"] == "information_ratio"
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 ```bash
 ./.venv/bin/python -m pytest test/test_web_console_contract.py::test_backtest_grid_returns_unified_envelope_for_dry_run -v
@@ -575,7 +575,7 @@ def test_backtest_wfv_returns_unified_envelope_for_dry_run():
 
 Expected: FAIL
 
-- [ ] **Step 3: 改造 `web/api/routers/backtest.py`**
+- [x] **Step 3: 改造 `web/api/routers/backtest.py`**
 
 `GridSearchRequest` 加 `dry_run: bool = True`、`deal_price: str = "close"`、`benchmark: Optional[str] = None`、`open_cost: float = 0.0005`、`close_cost: float = 0.0015`、`min_cost: float = 5.0`、`slippage: float = 0.0`、`start_date: Optional[str] = None`、`end_date: Optional[str] = None`、`output_csv: Optional[str] = None`(若已有同名字段就核对类型)。
 
@@ -615,7 +615,7 @@ async def start_grid_search(req: GridSearchRequest):
 
 WFV 类同。`compare` 加 `dry_run`,dry-run 返回输入文件列表与会读到的列信息预览。
 
-- [ ] **Step 4: 跑测试**
+- [x] **Step 4: 跑测试**
 
 ```bash
 ./.venv/bin/python -m pytest test/test_web_console_contract.py -v
@@ -624,7 +624,7 @@ WFV 类同。`compare` 加 `dry_run`,dry-run 返回输入文件列表与会读�
 
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add web/api/routers/backtest.py test/test_web_console_contract.py

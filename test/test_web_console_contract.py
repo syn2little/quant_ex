@@ -76,3 +76,39 @@ def test_models_delete_dry_run_lists_files():
         body = response.json()
         assert body["dry_run"] is True
         assert "files" in body["preview"]
+
+
+def test_backtest_grid_returns_unified_envelope_for_dry_run():
+    client = TestClient(create_app())
+
+    response = client.post("/api/backtest/grid", json={
+        "model_path": "models/dummy.pkl",
+        "topk_list": [5, 10],
+        "n_drop_list": [1, 3],
+        "hold_thresh_list": [5, 8],
+        "dry_run": True,
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["dry_run"] is True
+    assert body["preview"]["candidate_count"] == 2 * 2 * 2
+
+
+def test_backtest_wfv_returns_unified_envelope_for_dry_run():
+    client = TestClient(create_app())
+
+    response = client.post("/api/backtest/walk-forward", json={
+        "train_universes": ["csi300", "csi1000"],
+        "eval_market": "csi300",
+        "topk_list": [5],
+        "n_drop_list": [1],
+        "hold_thresh_list": [5],
+        "rank_metric": "information_ratio",
+        "dry_run": True,
+    })
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["dry_run"] is True
+    assert body["preview"]["rank_metric"] == "information_ratio"
