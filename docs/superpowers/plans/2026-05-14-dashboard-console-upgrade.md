@@ -70,7 +70,7 @@
 
 **Files:** N/A (git)
 
-- [ ] **Step 1: 确认干净工作树**
+- [x] **Step 1: 确认干净工作树**
 
 ```bash
 git status --short
@@ -78,7 +78,7 @@ git status --short
 
 Expected: 空输出(无 uncommitted)。若有,先与用户对齐再继续。
 
-- [ ] **Step 2: 创建分支**
+- [x] **Step 2: 创建分支**
 
 ```bash
 git checkout -b dashboard-console-base
@@ -95,7 +95,7 @@ Expected: 列出最新 commit hash + 分支已切换。
 - Modify: `web/api/services/task_manager.py`
 - Test: `test/test_web_console_contract.py`(新建,这是首个 test 文件)
 
-- [ ] **Step 1: 写失败测试**
+- [x] **Step 1: 写失败测试**
 
 新建 `test/test_web_console_contract.py`:
 
@@ -121,7 +121,7 @@ def test_task_state_has_console_fields():
     assert state.result_paths == []
 ```
 
-- [ ] **Step 2: 跑测试确认失败**
+- [x] **Step 2: 跑测试确认失败**
 
 ```bash
 ./.venv/bin/python -m pytest test/test_web_console_contract.py::test_task_state_has_console_fields -v
@@ -129,7 +129,7 @@ def test_task_state_has_console_fields():
 
 Expected: FAIL (`AttributeError: 'TaskState' object has no attribute 'page_key'`)
 
-- [ ] **Step 3: 修改 `web/api/services/task_manager.py`**
+- [x] **Step 3: 修改 `web/api/services/task_manager.py`**
 
 在 `TaskState` dataclass 中(`web/api/services/task_manager.py:26-34`)新增三个字段:
 
@@ -201,7 +201,7 @@ def _serialize(state: TaskState) -> dict:
 
 (若已有类似 serialize 函数则就地扩展)
 
-- [ ] **Step 4: 跑测试确认通过**
+- [x] **Step 4: 跑测试确认通过**
 
 ```bash
 ./.venv/bin/python -m pytest test/test_web_console_contract.py::test_task_state_has_console_fields -v
@@ -209,7 +209,7 @@ def _serialize(state: TaskState) -> dict:
 
 Expected: PASS
 
-- [ ] **Step 5: 跑既有测试不破坏**
+- [x] **Step 5: 跑既有测试不破坏**
 
 ```bash
 ./.venv/bin/python -m pytest test/test_web_dashboard.py test/test_agent_strategy_iteration.py -q
@@ -217,7 +217,7 @@ Expected: PASS
 
 Expected: 全 PASS(无回归)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add web/api/services/task_manager.py web/api/routers/system.py test/test_web_console_contract.py

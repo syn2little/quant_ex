@@ -6,10 +6,24 @@ from fastapi import APIRouter, Query
 from fastapi.responses import StreamingResponse
 from typing import Optional
 
-from web.api.services.task_manager import get_task_manager
+from web.api.services.task_manager import TaskState, get_task_manager
 from web.api.deps import CACHE_DIR, MODELS_DIR, LOGS_DIR, get_config
 
 router = APIRouter()
+
+
+def _serialize_task(state: TaskState) -> dict:
+    return {
+        "task_id": state.task_id,
+        "task_type": state.task_type,
+        "status": state.status.value,
+        "created_at": state.created_at,
+        "result": state.result,
+        "error": state.error,
+        "page_key": state.page_key,
+        "action_key": state.action_key,
+        "result_paths": state.result_paths,
+    }
 
 
 @router.get("/health")
@@ -44,16 +58,7 @@ async def runtime_info():
 @router.get("/tasks")
 async def list_tasks():
     tm = get_task_manager()
-    return [
-        {
-            "task_id": t.task_id,
-            "task_type": t.task_type,
-            "status": t.status.value,
-            "created_at": t.created_at,
-            "error": t.error,
-        }
-        for t in tm.list_tasks()
-    ]
+    return [_serialize_task(t) for t in tm.list_tasks()]
 
 
 @router.get("/tasks/{task_id}/stream")

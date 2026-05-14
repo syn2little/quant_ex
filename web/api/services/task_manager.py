@@ -31,6 +31,9 @@ class TaskState:
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     result: Optional[Any] = None
     error: Optional[str] = None
+    page_key: Optional[str] = None
+    action_key: Optional[str] = None
+    result_paths: list[str] = field(default_factory=list)
 
 
 class TaskManager:
@@ -44,9 +47,17 @@ class TaskManager:
         self,
         task_type: str,
         coro: Awaitable,
+        *,
+        page_key: Optional[str] = None,
+        action_key: Optional[str] = None,
     ) -> str:
         task_id = uuid.uuid4().hex[:12]
-        state = TaskState(task_id=task_id, task_type=task_type)
+        state = TaskState(
+            task_id=task_id,
+            task_type=task_type,
+            page_key=page_key,
+            action_key=action_key,
+        )
         self._tasks[task_id] = state
         self._queues[task_id] = asyncio.Queue()
 
@@ -59,10 +70,17 @@ class TaskManager:
         task_type: str,
         fn: Callable,
         *args,
+        page_key: Optional[str] = None,
+        action_key: Optional[str] = None,
         **kwargs,
     ) -> str:
         task_id = uuid.uuid4().hex[:12]
-        state = TaskState(task_id=task_id, task_type=task_type)
+        state = TaskState(
+            task_id=task_id,
+            task_type=task_type,
+            page_key=page_key,
+            action_key=action_key,
+        )
         self._tasks[task_id] = state
         self._queues[task_id] = asyncio.Queue()
 
@@ -81,6 +99,8 @@ class TaskManager:
             result = await coro
             state.status = TaskStatus.DONE
             state.result = result
+            if isinstance(result, dict) and isinstance(result.get("result_paths"), list):
+                state.result_paths = [str(path) for path in result["result_paths"]]
             try:
                 json.dumps(result)
                 event_result = result
