@@ -1,4 +1,6 @@
 import logging
+import subprocess
+import sys
 from typing import Optional
 
 import pandas as pd
@@ -118,7 +120,6 @@ async def mine_factors(req: MineRequest):
         return {"task_id": task_id, "dry_run": True, "preview": preview}
 
     def _mine():
-        import subprocess, sys
         cmd = [sys.executable, "run_factor_mining.py",
                "--min-ic", str(req.min_ic),
                "--min-icir", str(req.min_icir),
@@ -175,10 +176,3 @@ async def factor_heatmap(
     corr = df[numeric_cols].corr().fillna(0).values.tolist()
     corr = [[round(float(v), 4) for v in row] for row in corr]
     return {"factors": numeric_cols, "matrix": corr}
-
-
-def _safe_path(base_dir, filename: str):
-    """Prevent path traversal — reject filenames containing '..' or starting with '/'."""
-    if ".." in filename or filename.startswith("/"):
-        raise HTTPException(status_code=403, detail="Invalid filename")
-    return base_dir / filename

@@ -20,6 +20,7 @@ from fastapi.testclient import TestClient
 from web.api.app import create_app
 from web.api.routers import backtest as backtest_router
 from web.api.routers import data as data_router
+from web.api.routers import factors as factors_router
 from web.api.routers import models as models_router
 from web.api.services import task_manager as task_manager_module
 from web.api.services.task_manager import TaskManager
@@ -89,6 +90,9 @@ def test_data_fetch_real_run_mocked(client, monkeypatch):
     assert task["result"] == {"ok": True}
     assert task["page_key"] == "data"
     assert task["action_key"] == "data.fetch"
+    stream = client.get(f"/api/system/tasks/{body['task_id']}/stream")
+    assert '"page_key": "data"' in stream.text
+    assert '"action_key": "data.fetch"' in stream.text
 
 
 def test_data_purge_dry_run_real_run_and_validation(client, monkeypatch, tmp_path):
@@ -107,6 +111,7 @@ def test_data_purge_dry_run_real_run_and_validation(client, monkeypatch, tmp_pat
     dry_body = dry.json()
     assert dry_body["preview"]["count"] == 1
     _assert_task_metadata(client, dry_body, "data", "data.purge_expired")
+    assert cache_file.exists()
 
     real = client.delete("/api/data/cache/prices/expired?dry_run=false")
     assert real.status_code == 200
@@ -232,6 +237,14 @@ def test_models_delete_dry_run_real_run_and_validation(client, monkeypatch, tmp_
     assert invalid.status_code == 404
 
 
+def test_models_delete_rejects_encoded_path_traversal(client, monkeypatch, tmp_path):
+    monkeypatch.setattr(models_router, "MODELS_DIR", tmp_path)
+
+    response = client.delete("/api/models/..%2Fetc%2Fpasswd?dry_run=true")
+
+    assert response.status_code == 403
+
+
 # ---------- Backtest ----------
 
 
@@ -254,7 +267,7 @@ def test_backtest_grid_dry_run_real_run_and_validation(client, monkeypatch):
     assert dry_body["preview"]["candidate_count"] == 1
     _assert_task_metadata(client, dry_body, "backtest", "backtest.grid")
 
-    monkeypatch.setattr(subprocess, "run", _fake_grid_run)
+    monkeypatch.setattr(backtest_router.subprocess, "run", _fake_grid_run)
     real = client.post(
         "/api/backtest/grid",
         json={
@@ -308,9 +321,10 @@ def test_backtest_wfv_dry_run_real_run_and_validation(client, monkeypatch):
     assert dry.status_code == 200
     dry_body = dry.json()
     assert dry_body["preview"]["rank_metric"] == "information_ratio"
+    assert dry_body["preview"]["approximate"] is True
     _assert_task_metadata(client, dry_body, "backtest", "backtest.walk_forward")
 
-    monkeypatch.setattr(subprocess, "run", lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""))
+    monkeypatch.setattr(backtest_router.subprocess, "run", lambda *_args, **_kwargs: subprocess.CompletedProcess([], 0, "", ""))
     real = client.post("/api/backtest/walk-forward", json={**payload, "dry_run": False})
     assert real.status_code == 200
     task = _wait_for_terminal_task(client, real.json()["task_id"])
@@ -368,7 +382,13 @@ def test_signals_generate_dry_run_real_run_and_validation(client, monkeypatch, t
 
     run_daily = types.ModuleType("quant_ex.run_daily")
     signal_path = tmp_path / f"signal_{date.today().isoformat()}.txt"
-    run_daily.main = lambda **_kwargs: signal_path
+    captured = {}
+
+    def fake_daily_main(**kwargs):
+        captured.update(kwargs)
+        return signal_path
+
+    run_daily.main = fake_daily_main
     monkeypatch.setitem(sys.modules, "quant_ex.run_daily", run_daily)
     real = client.post("/api/signals/generate", json={"model_path": "models/dummy.pkl", "dry_run": False})
     assert real.status_code == 200
@@ -376,6 +396,7 @@ def test_signals_generate_dry_run_real_run_and_validation(client, monkeypatch, t
     assert task["status"] == "done"
     assert task["action_key"] == "signals.generate"
     assert task["result_paths"] == [str(signal_path)]
+    assert captured["dry_run"] is False
 
     invalid = client.post("/api/signals/generate", json={"model_path": ""})
     assert invalid.status_code == 422
@@ -446,12 +467,44 @@ def test_signals_notify_test_dry_run_real_run_and_validation(client, monkeypatch
         json={**payload, "dry_run": False, "confirm_send": True},
     )
     assert real.status_code == 200
-    task = _wait_for_terminal_task(client, real.json()["task_id"])
+    real_body = real.json()
+    assert real_body["sent"] is False
+    task = _wait_for_terminal_task(client, real_body["task_id"])
     assert task["status"] == "done"
     assert task["action_key"] == "signals.notify_test"
+    assert task["result"]["sent"] is True
 
     invalid = client.post(
         "/api/signals/notify-test",
         json={**payload, "dry_run": False, "confirm_send": False},
     )
     assert invalid.status_code == 400
+
+
+# ---------- Factors ----------
+
+
+def test_factors_evaluate_and_mine_real_run_mocked(client, monkeypatch):
+    evaluate = client.post("/api/factors/evaluate", json={"factor": "northbound", "dry_run": False})
+    assert evaluate.status_code == 200
+    evaluate_task = _wait_for_terminal_task(client, evaluate.json()["task_id"])
+    assert evaluate_task["status"] == "done"
+    assert evaluate_task["action_key"] == "factors.evaluate"
+    assert evaluate_task["result"]["factor"] == "northbound"
+
+    captured = {}
+
+    def _fake_mine_run(cmd, **_kwargs):
+        captured["cmd"] = cmd
+        return subprocess.CompletedProcess(cmd, 0, "ok", "")
+
+    monkeypatch.setattr(factors_router.subprocess, "run", _fake_mine_run)
+    mine = client.post(
+        "/api/factors/mine",
+        json={"min_ic": 0.04, "min_icir": 0.5, "top_n": 5, "dry_run": False},
+    )
+    assert mine.status_code == 200
+    mine_task = _wait_for_terminal_task(client, mine.json()["task_id"])
+    assert mine_task["status"] == "done"
+    assert mine_task["action_key"] == "factors.mine"
+    assert captured["cmd"][captured["cmd"].index("--min-ic") + 1] == "0.04"

@@ -69,7 +69,13 @@ async def create_run(request: CreateAgentRunRequest) -> dict:
         "append_memory": request.append_memory,
     }
     if request.use_llm:
-        task_id = await get_task_manager().start_sync_task("agent_create", create_agent_run, **kwargs)
+        task_id = await get_task_manager().start_sync_task(
+            "agent_create",
+            create_agent_run,
+            page_key="agents",
+            action_key="agents.create",
+            **kwargs,
+        )
         return {"task_id": task_id, "run_id": request.run_id}
     return create_agent_run(**kwargs)
 
@@ -96,6 +102,8 @@ async def execute_safe(run_id: str, request: ExecuteCommandsRequest | None = Non
         "agent_execute_safe",
         execute_agent_run_safe,
         run_id,
+        page_key="agents",
+        action_key="agents.execute_safe",
         command_ids=(request.command_ids if request else None),
     )
     return {"task_id": task_id, "run_id": run_id}
@@ -107,6 +115,8 @@ async def execute_approved(run_id: str, request: ExecuteApprovedRequest) -> dict
         "agent_execute_approved",
         execute_agent_run_approved,
         run_id,
+        page_key="agents",
+        action_key="agents.execute_approved",
         include_safe=request.include_safe,
         command_ids=request.command_ids,
     )
@@ -120,6 +130,8 @@ async def generate_feedback_from_candidate(run_id: str, command_id: str, request
         generate_agent_run_feedback,
         run_id,
         command_id,
+        page_key="agents",
+        action_key="agents.feedback",
         control_csv=request.control_csv,
         rank_metric=request.rank_metric,
     )

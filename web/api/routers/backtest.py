@@ -1,5 +1,6 @@
 import logging
 import json
+import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -20,10 +21,12 @@ router = APIRouter()
 
 
 def _safe_path(base_dir: Path, filename: str) -> Path:
-    """Prevent path traversal — reject filenames containing '..' or starting with '/'."""
-    if ".." in filename or filename.startswith("/"):
+    """Prevent path traversal."""
+    base = base_dir.resolve()
+    target = (base_dir / filename).resolve()
+    if target.parent != base:
         raise HTTPException(status_code=403, detail="Invalid filename")
-    return base_dir / filename
+    return target
 
 
 class GridSearchRequest(BaseModel):
@@ -178,7 +181,6 @@ async def start_grid_search(req: GridSearchRequest):
     _validate_grid_real_run(req)
 
     def _grid():
-        import subprocess
         argv = _build_grid_cmd(req)
         result = subprocess.run(argv, capture_output=True, text=True, timeout=600)
         if result.returncode != 0:
@@ -352,6 +354,7 @@ async def start_wfv(req: WFVRequest):
             "window_count": window_count,
             "total_runs": candidate_count * window_count * len(req.train_universes),
             "estimated_minutes": candidate_count * window_count * max(1, len(req.train_universes)) * 20,
+            "approximate": True,
             "rank_metric": "information_ratio",
         }
         task_id = await tm.start_sync_task(
@@ -368,7 +371,6 @@ async def start_wfv(req: WFVRequest):
     result_dir = Path("optimization_results") / f"walk_forward_{req.run_id}"
 
     def _wfv():
-        import subprocess
         cmd = _build_wfv_cmd(req)
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         if result.returncode != 0:

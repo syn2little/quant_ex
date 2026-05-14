@@ -18,16 +18,17 @@ router = APIRouter()
 
 def _safe_model_path(filename: str, suffix: str) -> Path:
     """Build sidecar path and prevent traversal. Returns the full Path."""
-    if ".." in filename or filename.startswith("/"):
-        raise HTTPException(status_code=403, detail="Invalid filename")
-    stem = Path(filename).stem
+    model_path = _safe_model_file(filename)
+    stem = model_path.stem
     return MODELS_DIR / f"{stem}{suffix}"
 
 
 def _safe_model_file(filename: str) -> Path:
-    if ".." in filename or filename.startswith("/"):
+    base = MODELS_DIR.resolve()
+    target = (MODELS_DIR / filename).resolve()
+    if target.parent != base:
         raise HTTPException(status_code=403, detail="Invalid filename")
-    return MODELS_DIR / Path(filename).name
+    return target
 
 
 def _model_result_paths(stem: str) -> list[str]:
@@ -323,7 +324,7 @@ async def start_training(req: TrainRequest):
     return {"task_id": task_id, "dry_run": False, "preview": None}
 
 
-@router.delete("/{filename}")
+@router.delete("/{filename:path}")
 async def delete_model(filename: str, dry_run: bool = Query(True)):
     target = _safe_model_file(filename)
     if not target.exists():

@@ -310,10 +310,18 @@ def test_agent_create_run_writes_plan_and_command_artifacts(monkeypatch, tmp_pat
 
 
 def test_agent_create_with_llm_returns_background_task(monkeypatch):
+    task_calls = []
+
     def fake_create_agent_run(**kwargs):
         return {"run_id": kwargs["run_id"] or "fake_agent_run", "status": "completed"}
 
+    class FakeTaskManager:
+        async def start_sync_task(self, task_type, fn, *args, **kwargs):
+            task_calls.append({"task_type": task_type, "args": args, "kwargs": kwargs})
+            return "agent_create_task"
+
     monkeypatch.setattr(agents_router, "create_agent_run", fake_create_agent_run)
+    monkeypatch.setattr(agents_router, "get_task_manager", lambda: FakeTaskManager())
 
     client = TestClient(create_app())
     response = client.post(
@@ -325,6 +333,9 @@ def test_agent_create_with_llm_returns_background_task(monkeypatch):
     payload = response.json()
     assert payload["task_id"]
     assert payload["run_id"] == "async_agent_run"
+    assert task_calls[-1]["task_type"] == "agent_create"
+    assert task_calls[-1]["kwargs"]["page_key"] == "agents"
+    assert task_calls[-1]["kwargs"]["action_key"] == "agents.create"
 
 
 def test_agent_approval_template_regenerates_from_saved_plan(monkeypatch, tmp_path):
@@ -392,6 +403,8 @@ def test_agent_approval_update_and_execute_safe_task(monkeypatch, tmp_path):
     assert task_calls[-1]["task_type"] == "agent_execute_safe"
     assert task_calls[-1]["args"] == ("approval_update",)
     assert task_calls[-1]["kwargs"]["command_ids"] == ["cmd_007"]
+    assert task_calls[-1]["kwargs"]["page_key"] == "agents"
+    assert task_calls[-1]["kwargs"]["action_key"] == "agents.execute_safe"
 
     approved_response = client.post(
         "/api/agents/runs/approval_update/execute-approved",
@@ -402,6 +415,20 @@ def test_agent_approval_update_and_execute_safe_task(monkeypatch, tmp_path):
     assert task_calls[-1]["task_type"] == "agent_execute_approved"
     assert task_calls[-1]["kwargs"]["include_safe"] is True
     assert task_calls[-1]["kwargs"]["command_ids"] == ["cmd_007"]
+    assert task_calls[-1]["kwargs"]["page_key"] == "agents"
+    assert task_calls[-1]["kwargs"]["action_key"] == "agents.execute_approved"
+
+    feedback_response = client.post(
+        "/api/agents/runs/approval_update/feedback/cmd_007",
+        json={"control_csv": "control.csv", "rank_metric": "information_ratio"},
+    )
+
+    assert feedback_response.status_code == 200
+    assert task_calls[-1]["task_type"] == "agent_feedback"
+    assert task_calls[-1]["kwargs"]["control_csv"] == "control.csv"
+    assert task_calls[-1]["kwargs"]["rank_metric"] == "information_ratio"
+    assert task_calls[-1]["kwargs"]["page_key"] == "agents"
+    assert task_calls[-1]["kwargs"]["action_key"] == "agents.feedback"
 
 
 def test_agent_command_selection_distinguishes_empty_from_all():

@@ -323,7 +323,7 @@ async def generate_signal(req: GenerateSignalRequest):
             model_path=req.model_path,
             account=req.account,
             current_positions=positions if positions else None,
-            dry_run=req.dry_run,
+            dry_run=False,
         )
         if signal_path is None:
             signal_path = _signal_output_path(req.config_override or req.config)
@@ -570,7 +570,7 @@ async def send_notify_test(req: NotifyTestRequest):
             page_key="signals",
             action_key="signals.notify_test",
         )
-        return {"task_id": task_id, "dry_run": False, "preview": None, "sent": True}
+        return {"task_id": task_id, "dry_run": False, "preview": None, "sent": False}
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 

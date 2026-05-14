@@ -106,7 +106,16 @@ class TaskManager:
                 event_result = result
             except TypeError:
                 event_result = str(result)[:500]
-            await self._queues[task_id].put({"type": "done", "data": {"result": event_result}})
+            await self._queues[task_id].put(
+                {
+                    "type": "done",
+                    "data": {
+                        "result": event_result,
+                        "page_key": state.page_key,
+                        "action_key": state.action_key,
+                    },
+                }
+            )
         except asyncio.CancelledError:
             state.status = TaskStatus.CANCELLED
             await self._queues[task_id].put({"type": "done", "data": {"status": "cancelled"}})
@@ -114,7 +123,17 @@ class TaskManager:
             state.status = TaskStatus.FAILED
             state.error = str(exc)
             logger.exception(f"Task {task_id} failed")
-            await self._queues[task_id].put({"type": "error", "data": {"message": str(exc), "traceback": traceback.format_exc()}})
+            await self._queues[task_id].put(
+                {
+                    "type": "error",
+                    "data": {
+                        "message": str(exc),
+                        "traceback": traceback.format_exc(),
+                        "page_key": state.page_key,
+                        "action_key": state.action_key,
+                    },
+                }
+            )
         finally:
             try:
                 await self._queues[task_id].put(None)  # sentinel
