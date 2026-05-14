@@ -16,7 +16,9 @@ from web.api.app import create_app
 def _ensure_spa_dist():
     dist = PROJECT_ROOT / "web" / "frontend" / "dist"
     dist.mkdir(parents=True, exist_ok=True)
-    (dist / "index.html").write_text('<div id="root"></div>', encoding="utf-8")
+    index = dist / "index.html"
+    if not index.exists():
+        index.write_text('<div id="root"></div>', encoding="utf-8")
 
 
 def test_signals_page_serves():

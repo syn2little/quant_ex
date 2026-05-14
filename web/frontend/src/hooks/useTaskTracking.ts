@@ -34,6 +34,7 @@ export function useTaskTracking({
 
   const trackTask = useCallback(
     (taskId: string) => {
+      window.dispatchEvent(new CustomEvent("console:task-created", { detail: { taskId } }));
       if (streamsRef.current[taskId]) return;
       const source = subscribeTask(taskId, (ev) => {
         try {

@@ -231,6 +231,7 @@ function TrainActionCard({
           </Toggle>
           <button
             type="button"
+            data-testid="models-train-submit"
             onClick={submit}
             disabled={submitting || !modelType || !tag}
             className="inline-flex items-center gap-2 rounded-sm border border-terminal-green px-3 py-1.5 font-mono text-xs text-terminal-green transition-colors hover:bg-terminal-green-glow disabled:cursor-not-allowed disabled:opacity-40"
@@ -661,7 +662,6 @@ function InspectTab({
 }
 
 export function ModelsPage() {
-  const { t } = useTranslation();
   const [models, setModels] = useState<ModelInfo[]>([]);
   const [registry, setRegistry] = useState<RegistryInfo | null>(null);
   const [loading, setLoading] = useState(true);
@@ -688,7 +688,7 @@ export function ModelsPage() {
   return (
     <ConsolePageLayout
       pageKey="models"
-      titleKey={t("console.models.title")}
+      titleKey="console.models.title"
       taskTypeFilter={TASK_FILTERS}
       tabs={{
         overview: <OverviewTab models={models} tasks={tasks} />,

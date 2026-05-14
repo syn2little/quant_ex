@@ -338,7 +338,16 @@
       "statusDone": "done",
       "statusFailed": "failed",
       "statusCancelled": "cancelled",
-      "cancel": "Cancel"
+      "cancel": "Cancel",
+      "close": "Close task drawer",
+      "details": "Details",
+      "events": "Events",
+      "noEvents": "No live events captured.",
+      "result": "Result",
+      "taskId": "Task ID",
+      "action": "Action",
+      "status": "Status",
+      "createdAt": "Created"
     },
     "tabs": {
       "overview": "Overview",

@@ -40,6 +40,11 @@ function post<T>(path: string, body: unknown): Promise<T> {
   return request<T>(path, { method: "POST", body: JSON.stringify(body) });
 }
 
+function nullIfBlank(value: string | null | undefined): string | null | undefined {
+  if (typeof value !== "string") return value;
+  return value.trim() ? value : null;
+}
+
 export function listModels(): Promise<ModelInfo[]> {
   return request<ModelInfo[]>("/api/models");
 }
@@ -89,7 +94,13 @@ export async function fetchCompareRuns(filenames: string[]): Promise<CompareRun[
 }
 
 export function triggerGrid(params: GridParams): Promise<TaskTrigger<BacktestPreview>> {
-  return post<TaskTrigger<BacktestPreview>>("/api/backtest/grid", params);
+  return post<TaskTrigger<BacktestPreview>>("/api/backtest/grid", {
+    ...params,
+    benchmark: nullIfBlank(params.benchmark),
+    start_date: nullIfBlank(params.start_date),
+    end_date: nullIfBlank(params.end_date),
+    output_csv: nullIfBlank(params.output_csv),
+  });
 }
 
 export function triggerWFV(params: WFVParams): Promise<TaskTrigger<BacktestPreview>> {

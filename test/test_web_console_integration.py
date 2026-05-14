@@ -208,6 +208,8 @@ def test_backtest_grid_dry_run_real_run_and_validation(client, monkeypatch):
     task = _wait_for_terminal_task(client, real.json()["task_id"])
     assert task["status"] == "done"
     assert task["action_key"] == "backtest.grid"
+    assert task["result_paths"]
+    assert task["result_paths"][0].endswith(".csv")
 
     invalid = client.post("/api/backtest/grid", json={"model_path": ""})
     assert invalid.status_code == 422
@@ -217,6 +219,12 @@ def test_backtest_grid_dry_run_real_run_and_validation(client, monkeypatch):
         json={**payload, "topk_list": []},
     )
     assert invalid_empty_list.status_code == 422
+
+    unsupported_real = client.post(
+        "/api/backtest/grid",
+        json={**payload, "benchmark": "SH000905", "dry_run": False},
+    )
+    assert unsupported_real.status_code == 422
 
 
 def test_backtest_wfv_dry_run_real_run_and_validation(client, monkeypatch):
@@ -240,6 +248,7 @@ def test_backtest_wfv_dry_run_real_run_and_validation(client, monkeypatch):
     task = _wait_for_terminal_task(client, real.json()["task_id"])
     assert task["status"] == "done"
     assert task["action_key"] == "backtest.walk_forward"
+    assert any(path.endswith("walk_forward_summary.csv") for path in task["result_paths"])
 
     invalid = client.post("/api/backtest/walk-forward", json={**payload, "rank_metric": "sharpe"})
     assert invalid.status_code == 400
@@ -249,6 +258,12 @@ def test_backtest_wfv_dry_run_real_run_and_validation(client, monkeypatch):
         json={**payload, "train_universes": []},
     )
     assert invalid_empty_list.status_code == 422
+
+    unsupported_real = client.post(
+        "/api/backtest/walk-forward",
+        json={**payload, "rolling_window_days": 126, "dry_run": False},
+    )
+    assert unsupported_real.status_code == 422
 
 
 def test_backtest_compare_dry_run_real_run_and_validation(client, monkeypatch):

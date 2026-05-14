@@ -338,7 +338,16 @@
       "statusDone": "已完成",
       "statusFailed": "失败",
       "statusCancelled": "已取消",
-      "cancel": "取消任务"
+      "cancel": "取消任务",
+      "close": "关闭任务面板",
+      "details": "详情",
+      "events": "事件",
+      "noEvents": "暂无实时事件。",
+      "result": "结果",
+      "taskId": "任务 ID",
+      "action": "动作",
+      "status": "状态",
+      "createdAt": "创建时间"
     },
     "tabs": {
       "overview": "概览",

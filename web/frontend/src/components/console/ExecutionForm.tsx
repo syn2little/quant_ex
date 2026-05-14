@@ -36,6 +36,11 @@ export function ExecutionForm<TParams extends FieldValues>({
     defaultValues: defaults as DefaultValues<TParams>,
   });
 
+  const emitTaskCreated = (taskId: string) => {
+    if (taskId === "awaiting-confirmation" || taskId === "pending-confirmation") return;
+    window.dispatchEvent(new CustomEvent("console:task-created", { detail: { taskId } }));
+  };
+
   return (
     <form
       data-testid={`execution-form-${actionKey}`}
@@ -43,10 +48,12 @@ export function ExecutionForm<TParams extends FieldValues>({
       onSubmit={form.handleSubmit(async (params) => {
         const dryRun = (params as Record<string, unknown>).dry_run;
         if ((typeof dryRun === "boolean" ? dryRun : undefined) ?? dryRunDefault) {
-          await onDryRun(params);
+          const result = await onDryRun(params);
+          emitTaskCreated(result.task_id);
           return;
         }
-        await onSubmit(params);
+        const result = await onSubmit(params);
+        emitTaskCreated(result.task_id);
       })}
     >
       {renderFields(form)}

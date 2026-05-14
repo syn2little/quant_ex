@@ -125,6 +125,30 @@ def _build_grid_cmd(req: GridSearchRequest) -> list[str]:
     return argv
 
 
+def _validate_grid_real_run(req: GridSearchRequest) -> None:
+    unsupported = []
+    if req.benchmark is not None:
+        unsupported.append("benchmark")
+    if req.deal_price != "close":
+        unsupported.append("deal_price")
+    if req.open_cost != 0.0005:
+        unsupported.append("open_cost")
+    if req.close_cost != 0.0015:
+        unsupported.append("close_cost")
+    if req.min_cost != 5.0:
+        unsupported.append("min_cost")
+    if req.slippage != 0.0:
+        unsupported.append("slippage")
+    if unsupported:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "run_backtest.py does not support these real-run overrides yet: "
+                + ", ".join(unsupported)
+            ),
+        )
+
+
 @router.post("/grid")
 async def start_grid_search(req: GridSearchRequest):
     tm = get_task_manager()
@@ -151,13 +175,19 @@ async def start_grid_search(req: GridSearchRequest):
         )
         return {"task_id": task_id, "dry_run": True, "preview": preview}
 
+    _validate_grid_real_run(req)
+
     def _grid():
         import subprocess
         argv = _build_grid_cmd(req)
         result = subprocess.run(argv, capture_output=True, text=True, timeout=600)
         if result.returncode != 0:
             raise RuntimeError(f"Grid search failed (exit {result.returncode}): {result.stderr[-500:]}")
-        result_paths = [req.output_csv] if req.output_csv else []
+        result_paths = [
+            req.output_csv
+            if req.output_csv
+            else str(BACKTEST_RESULTS_DIR / f"grid_{datetime.now().strftime('%Y-%m-%d')}.csv")
+        ]
         return {"status": "completed", "result_paths": result_paths}
 
     task_id = await tm.start_sync_task(
@@ -286,6 +316,23 @@ def _build_wfv_cmd(req: WFVRequest) -> list[str]:
     return cmd
 
 
+def _validate_wfv_real_run(req: WFVRequest) -> None:
+    unsupported = []
+    if req.rolling_window_days != 252:
+        unsupported.append("rolling_window_days")
+    if req.step_days != 63:
+        unsupported.append("step_days")
+    if unsupported:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                "run_walk_forward_validation.py uses explicit folds and does not support "
+                "these real-run rolling-window overrides yet: "
+                + ", ".join(unsupported)
+            ),
+        )
+
+
 @router.post("/walk-forward")
 async def start_wfv(req: WFVRequest):
     if req.rank_metric != "information_ratio":
@@ -315,13 +362,25 @@ async def start_wfv(req: WFVRequest):
         )
         return {"task_id": task_id, "dry_run": True, "preview": preview}
 
+    _validate_wfv_real_run(req)
+    if not req.run_id:
+        req.run_id = f"web_{datetime.now().strftime('%Y%m%d_%H%M%S')}"
+    result_dir = Path("optimization_results") / f"walk_forward_{req.run_id}"
+
     def _wfv():
         import subprocess
         cmd = _build_wfv_cmd(req)
         result = subprocess.run(cmd, capture_output=True, text=True, timeout=600)
         if result.returncode != 0:
             raise RuntimeError(f"Walk-forward validation failed (exit {result.returncode}): {result.stderr[-500:]}")
-        return {"status": "completed", "result_paths": []}
+        return {
+            "status": "completed",
+            "result_paths": [
+                str(result_dir / "walk_forward_summary.csv"),
+                str(result_dir / "walk_forward_all_results.csv"),
+                str(result_dir / "walk_forward_report.md"),
+            ],
+        }
 
     task_id = await tm.start_sync_task(
         "wfv",

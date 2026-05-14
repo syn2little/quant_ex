@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 export type DryRunPreviewProps = {
   loading?: boolean;
@@ -13,7 +14,9 @@ export function DryRunPreview({
   preview,
   renderPreview,
 }: DryRunPreviewProps) {
-  if (loading) return <div data-testid="dry-run-loading">Loading preview...</div>;
+  const { t } = useTranslation();
+
+  if (loading) return <div data-testid="dry-run-loading">{t("common.loading")}</div>;
   if (error) {
     return (
       <div data-testid="dry-run-error" className="rounded border border-red-200 bg-red-50 p-3 text-red-700">

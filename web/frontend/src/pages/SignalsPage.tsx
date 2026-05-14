@@ -417,9 +417,9 @@ function RebalanceAction() {
       </div>
       <ConfirmDialog
         open={!!pendingRealParams}
-        titleKey={t("console.signals.confirm.rebalanceTitle")}
+        titleKey="console.signals.confirm.rebalanceTitle"
         impactSummary={<p>{t("console.signals.confirm.rebalanceImpact")}</p>}
-        confirmLabelKey={t("console.signals.confirm.confirmRealSend")}
+        confirmLabelKey="console.signals.confirm.confirmRealSend"
         destructive
         onCancel={() => setPendingRealParams(null)}
         onConfirm={() => {
@@ -513,9 +513,9 @@ function NotifyTestAction() {
       </div>
       <ConfirmDialog
         open={!!pendingRealParams}
-        titleKey={t("console.signals.confirm.notifyTitle")}
+        titleKey="console.signals.confirm.notifyTitle"
         impactSummary={<p>{t("console.signals.confirm.notifyImpact")}</p>}
-        confirmLabelKey={t("console.signals.confirm.confirmRealSend")}
+        confirmLabelKey="console.signals.confirm.confirmRealSend"
         destructive
         onCancel={() => setPendingRealParams(null)}
         onConfirm={() => {
@@ -733,12 +733,10 @@ function OverviewTab() {
 }
 
 export function SignalsPage() {
-  const { t } = useTranslation();
-
   return (
     <ConsolePageLayout
       pageKey="signals"
-      titleKey={t("console.signals.title")}
+      titleKey="console.signals.title"
       taskTypeFilter={TASK_TYPES}
       tabs={{
         overview: <OverviewTab />,

@@ -1,10 +1,15 @@
 """Phase 0 contract regression tests for the dashboard console upgrade."""
 from __future__ import annotations
 
+from pathlib import Path
+
 from fastapi.testclient import TestClient
 
 from web.api.app import create_app
 from web.api.services.task_manager import TaskState
+
+
+FRONTEND_SRC = Path(__file__).resolve().parents[1] / "web" / "frontend" / "src"
 
 
 def test_task_state_has_console_fields():
@@ -16,6 +21,27 @@ def test_task_state_has_console_fields():
     assert state.page_key is None
     assert state.action_key is None
     assert state.result_paths == []
+
+
+def test_console_layout_translates_title_tabs_and_drawer_label():
+    source = (FRONTEND_SRC / "components" / "console" / "ConsolePageLayout.tsx").read_text(encoding="utf-8")
+
+    assert "useTranslation" in source
+    assert "{t(titleKey)}" in source
+    assert '{t("console.tasks.drawerTitle")}' in source
+    assert "{t(tab.labelKey)}" in source
+
+
+def test_console_dialog_and_drawer_translate_labels_and_show_details():
+    dialog = (FRONTEND_SRC / "components" / "console" / "ConfirmDialog.tsx").read_text(encoding="utf-8")
+    drawer = (FRONTEND_SRC / "components" / "console" / "TaskDrawer.tsx").read_text(encoding="utf-8")
+
+    assert "{t(titleKey)}" in dialog
+    assert '{t("console.common.cancel")}' in dialog
+    assert "{t(confirmLabelKey)}" in dialog
+    assert 'data-testid="task-drawer-detail"' in drawer
+    assert "subscribeTask" in drawer
+    assert 't("console.tasks.events")' in drawer
 
 
 def test_data_fetch_returns_unified_envelope_for_dry_run():

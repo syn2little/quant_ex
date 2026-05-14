@@ -1,4 +1,5 @@
 import type { ReactNode } from "react";
+import { useTranslation } from "react-i18next";
 
 export type ConfirmDialogProps = {
   open: boolean;
@@ -19,6 +20,8 @@ export function ConfirmDialog({
   onConfirm,
   onCancel,
 }: ConfirmDialogProps) {
+  const { t } = useTranslation();
+
   if (!open) return null;
   return (
     <div
@@ -29,12 +32,12 @@ export function ConfirmDialog({
     >
       <div className="w-[480px] max-w-[90vw] rounded-lg bg-white p-6 shadow-xl">
         <h3 className="mb-3 text-lg font-semibold" data-i18n={titleKey}>
-          {titleKey}
+          {t(titleKey)}
         </h3>
         <div className="mb-4 text-sm text-slate-700">{impactSummary}</div>
         <div className="flex justify-end gap-2">
           <button type="button" onClick={onCancel} className="rounded border px-3 py-1.5">
-            Cancel
+            {t("console.common.cancel")}
           </button>
           <button
             type="button"
@@ -44,7 +47,7 @@ export function ConfirmDialog({
               destructive ? "bg-red-600 hover:bg-red-700" : "bg-blue-600 hover:bg-blue-700"
             }`}
           >
-            {confirmLabelKey}
+            {t(confirmLabelKey)}
           </button>
         </div>
       </div>

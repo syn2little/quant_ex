@@ -10,6 +10,8 @@
 
 **Design Spec:** [docs/superpowers/specs/2026-05-14-dashboard-console-upgrade-design.md](../specs/2026-05-14-dashboard-console-upgrade-design.md)
 
+**Implementation Status (2026-05-14):** Phase 0/1/2 功能实现已完成并通过验收。最终收尾包括公共 console i18n 翻译、TaskDrawer 详情 + SSE 事件区、Backtest 空可选参数规范化、Backtest real-run 不支持参数显式 422、Grid/WFV `result_paths` 回填、HTTP + Chrome CDP e2e 覆盖“提交 → 抽屉 → 历史”。验收门禁见本文件 Phase 2 与最终提交记录。
+
 ---
 
 ## File Structure

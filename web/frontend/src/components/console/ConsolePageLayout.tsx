@@ -1,5 +1,6 @@
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
+import { useTranslation } from "react-i18next";
 import { TaskDrawer } from "./TaskDrawer";
 
 export type PageKey = "data" | "models" | "backtest" | "signals";
@@ -25,8 +26,15 @@ export function ConsolePageLayout({
   taskTypeFilter,
   initialTab = "execute",
 }: ConsolePageLayoutProps) {
+  const { t } = useTranslation();
   const [active, setActive] = useState<ConsoleTab>(initialTab);
   const [drawerOpen, setDrawerOpen] = useState(false);
+
+  useEffect(() => {
+    const openDrawer = () => setDrawerOpen(true);
+    window.addEventListener("console:task-created", openDrawer);
+    return () => window.removeEventListener("console:task-created", openDrawer);
+  }, []);
 
   const tabList: { key: ConsoleTab; available: boolean; labelKey: string }[] = [
     { key: "overview", available: !!tabs.overview, labelKey: "console.tabs.overview" },
@@ -39,7 +47,7 @@ export function ConsolePageLayout({
     <div className="p-6">
       <header className="mb-4 flex items-center justify-between gap-4">
         <h1 className="text-2xl font-bold" data-i18n={titleKey}>
-          {titleKey}
+          {t(titleKey)}
         </h1>
         <button
           type="button"
@@ -47,7 +55,7 @@ export function ConsolePageLayout({
           data-testid="open-task-drawer"
           className="rounded border px-3 py-1.5"
         >
-          Tasks
+          {t("console.tasks.drawerTitle")}
         </button>
       </header>
       <nav className="mb-4 border-b">
@@ -64,7 +72,7 @@ export function ConsolePageLayout({
                     active === tab.key ? "border-b-2 border-blue-600 font-medium" : ""
                   }`}
                 >
-                  {tab.labelKey}
+                  {t(tab.labelKey)}
                 </button>
               </li>
             ))}
