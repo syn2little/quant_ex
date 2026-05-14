@@ -899,7 +899,7 @@ git commit -m "feat(web): add tasks.ts client wrapper + extended TaskState type"
 - Create: `web/frontend/src/hooks/useTaskTracking.ts`
 - Create: `web/frontend/src/hooks/useDryRunPreview.ts`
 
-- [ ] **Step 1: 写 useTaskTracking.ts**
+- [x] **Step 1: 写 useTaskTracking.ts**
 
 ```typescript
 import { useEffect, useState, useCallback } from "react";
@@ -966,7 +966,7 @@ export function useTaskTracking({ pageKey, taskTypeFilter, pollMs = 5000 }: UseT
 }
 ```
 
-- [ ] **Step 2: 写 useDryRunPreview.ts**
+- [x] **Step 2: 写 useDryRunPreview.ts**
 
 ```typescript
 import { useState, useCallback } from "react";
@@ -1004,7 +1004,7 @@ export function useDryRunPreview<TParams, TPreview>(
 }
 ```
 
-- [ ] **Step 3: TypeScript 编译检查**
+- [x] **Step 3: TypeScript 编译检查**
 
 ```bash
 cd web/frontend && npx tsc --noEmit
@@ -1012,7 +1012,7 @@ cd web/frontend && npx tsc --noEmit
 
 Expected: 无错误。
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add web/frontend/src/hooks/useTaskTracking.ts web/frontend/src/hooks/useDryRunPreview.ts
