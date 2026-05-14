@@ -1200,7 +1200,7 @@ git commit -m "feat(web): add ExecutionForm + DryRunPreview + ConfirmDialog cons
 - Create: `web/frontend/src/components/console/ConsolePageLayout.tsx`
 - Create: `web/frontend/src/components/console/index.ts`
 
-- [ ] **Step 1: 写 TaskChip.tsx**
+- [x] **Step 1: 写 TaskChip.tsx**
 
 ```tsx
 import type { TaskState } from "../../api/types";
@@ -1225,7 +1225,7 @@ export function TaskChip({ task, onClick }: { task: TaskState; onClick?: () => v
 }
 ```
 
-- [ ] **Step 2: 写 TaskDrawer.tsx**
+- [x] **Step 2: 写 TaskDrawer.tsx**
 
 ```tsx
 import { useEffect } from "react";
@@ -1287,7 +1287,7 @@ export function TaskDrawer({ pageKey, taskTypeFilter, open, onClose }: TaskDrawe
 }
 ```
 
-- [ ] **Step 3: 写 ConsolePageLayout.tsx**
+- [x] **Step 3: 写 ConsolePageLayout.tsx**
 
 ```tsx
 import { ReactNode, useState } from "react";
@@ -1369,7 +1369,7 @@ export function ConsolePageLayout({
 }
 ```
 
-- [ ] **Step 4: 写 index.ts**
+- [x] **Step 4: 写 index.ts**
 
 ```typescript
 export { ExecutionForm } from "./ExecutionForm";
@@ -1385,7 +1385,7 @@ export { ConsolePageLayout } from "./ConsolePageLayout";
 export type { ConsolePageLayoutProps, ConsoleTab } from "./ConsolePageLayout";
 ```
 
-- [ ] **Step 5: 编译 + build**
+- [x] **Step 5: 编译 + build**
 
 ```bash
 cd web/frontend && npx tsc --noEmit && npm run build
@@ -1393,7 +1393,7 @@ cd web/frontend && npx tsc --noEmit && npm run build
 
 Expected: build 成功(允许 Vite chunk-size 警告)。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add web/frontend/src/components/console/

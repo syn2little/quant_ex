@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 import { useForm } from "react-hook-form";
-import type { DefaultValues, FieldValues, UseFormReturn } from "react-hook-form";
+import type { DefaultValues, FieldValues, Resolver, UseFormReturn } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import type { z } from "zod";
 
@@ -32,7 +32,7 @@ export function ExecutionForm<TParams extends FieldValues>({
   renderFields,
 }: ExecutionFormProps<TParams>) {
   const form = useForm<TParams>({
-    resolver: zodResolver(schema),
+    resolver: zodResolver(schema as never) as Resolver<TParams>,
     defaultValues: defaults as DefaultValues<TParams>,
   });
 
