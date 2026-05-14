@@ -5,7 +5,7 @@ import sys
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 
 from web.api.deps import PROJECT_ROOT, SIGNALS_DIR, get_config
 from web.api.services.task_manager import get_task_manager
@@ -46,6 +46,13 @@ class GenerateSignalRequest(BaseModel):
     config_override: Optional[str] = None
     position_date: Optional[str] = None
     min_action_value: Optional[float] = None
+
+    @field_validator("model_path", "positions", "universe", "config", "config_override", "position_date")
+    @classmethod
+    def strings_must_not_be_blank(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and not value.strip():
+            raise ValueError("string fields must not be blank")
+        return value
 
 
 @router.post("/generate")
@@ -109,6 +116,13 @@ class RebalanceRequest(BaseModel):
     skip_update: bool = True
     force: bool = False
     notify_channel: Optional[str] = None
+
+    @field_validator("config", "positions", "position_date", "notify_channel")
+    @classmethod
+    def strings_must_not_be_blank(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and not value.strip():
+            raise ValueError("string fields must not be blank")
+        return value
 
 
 def _build_rebalance_cmd(req: RebalanceRequest) -> list[str]:
@@ -207,12 +221,19 @@ async def run_rebalance(req: RebalanceRequest):
 
 
 class NotifyTestRequest(BaseModel):
-    title: str = "Notification test"
+    title: str = Field(default="Notification test", min_length=1)
     content: Optional[str] = None
     message: Optional[str] = None
     channel: Optional[str] = None
     dry_run: bool = True
     confirm_send: bool = False
+
+    @field_validator("content", "message", "channel")
+    @classmethod
+    def strings_must_not_be_blank(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and not value.strip():
+            raise ValueError("string fields must not be blank")
+        return value
 
 
 _NOTIFY_CHANNELS = {"bark", "pushplus", "dingtalk", "serverchan", "wechat_mp", "all"}

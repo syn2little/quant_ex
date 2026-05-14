@@ -4,7 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from web.api.deps import CACHE_DIR, get_config
 from web.api.services.task_manager import get_task_manager
@@ -24,6 +24,13 @@ class FetchRequest(BaseModel):
     force: bool = False
     force_refresh: bool = False
     dry_run: bool = True
+
+    @field_validator("data_types")
+    @classmethod
+    def data_types_must_not_be_empty(cls, value: Optional[list[str]]) -> Optional[list[str]]:
+        if value is not None and len(value) == 0:
+            raise ValueError("data_types must not be empty")
+        return value
 
 
 class CacheStatus(BaseModel):

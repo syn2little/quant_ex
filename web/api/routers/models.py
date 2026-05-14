@@ -6,7 +6,7 @@ from typing import Optional
 
 import yaml
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from web.api.deps import MODELS_DIR, get_config
 from web.api.services.task_manager import get_task_manager
@@ -123,9 +123,9 @@ async def get_importance(filename: str):
 
 
 class TrainRequest(BaseModel):
-    model: str = "lgbm"
+    model: Optional[str] = None
     model_type: Optional[str] = None
-    tag: Optional[str] = None
+    tag: Optional[str] = Field(default=None, min_length=1)
     config_override: Optional[str] = None
     market: Optional[str] = None
     train_start_date: Optional[str] = None
@@ -140,6 +140,35 @@ class TrainRequest(BaseModel):
     bagging_fraction: Optional[float] = None
     ensemble_seeds: Optional[list[int]] = None
     dry_run: bool = True
+
+    @field_validator("model", "model_type", "market", "config_override", "train_start_date", "train_end_date", "fit_start", "fit_end")
+    @classmethod
+    def strings_must_not_be_blank(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and not value.strip():
+            raise ValueError("string fields must not be blank")
+        return value
+
+    @field_validator("factors")
+    @classmethod
+    def factors_must_not_be_empty_when_provided(cls, value: list[str]) -> list[str]:
+        if value is not None and len(value) == 0:
+            return value
+        if any(not item.strip() for item in value):
+            raise ValueError("factors must not contain blank values")
+        return value
+
+    @field_validator("ensemble_seeds")
+    @classmethod
+    def ensemble_seeds_must_not_be_empty(cls, value: Optional[list[int]]) -> Optional[list[int]]:
+        if value is not None and len(value) == 0:
+            raise ValueError("ensemble_seeds must not be empty")
+        return value
+
+    @model_validator(mode="after")
+    def model_name_is_required(self) -> "TrainRequest":
+        if not (self.model_type or self.model):
+            raise ValueError("model_type is required")
+        return self
 
 
 def _train_model(req: TrainRequest) -> dict:

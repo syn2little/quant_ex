@@ -7,7 +7,7 @@ from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from web.api.deps import get_config, BACKTEST_RESULTS_DIR
 from web.api.services.task_manager import get_task_manager
@@ -55,6 +55,20 @@ class GridSearchRequest(BaseModel):
     markets: Optional[list[str]] = None
     explore_markets: bool = False
     dry_run: bool = True
+
+    @field_validator("model_path", "market", "benchmark", "deal_price", "start", "start_date", "end", "end_date", "output_csv")
+    @classmethod
+    def strings_must_not_be_blank(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and not value.strip():
+            raise ValueError("string fields must not be blank")
+        return value
+
+    @field_validator("topk", "topk_list", "n_drop", "n_drop_list", "hold_thresh", "hold_thresh_list", "slippage_multipliers", "markets")
+    @classmethod
+    def lists_must_not_be_empty_when_provided(cls, value):
+        if value is not None and len(value) == 0:
+            raise ValueError("list fields must not be empty")
+        return value
 
 
 def _grid_topk(req: GridSearchRequest) -> list[int]:
@@ -213,6 +227,20 @@ class WFVRequest(BaseModel):
     train_config: Optional[str] = None
     dry_run: bool = True
 
+    @field_validator("eval_market", "rank_metric", "run_id", "folds_config", "train_config")
+    @classmethod
+    def strings_must_not_be_blank(cls, value: Optional[str]) -> Optional[str]:
+        if value is not None and not value.strip():
+            raise ValueError("string fields must not be blank")
+        return value
+
+    @field_validator("train_universes", "topk", "topk_list", "n_drop", "n_drop_list", "hold_thresh", "hold_thresh_list")
+    @classmethod
+    def lists_must_not_be_empty(cls, value):
+        if value is not None and len(value) == 0:
+            raise ValueError("list fields must not be empty")
+        return value
+
 
 def _wfv_topk(req: WFVRequest) -> list[int]:
     return req.topk_list or req.topk
@@ -335,6 +363,17 @@ class CompareRequest(BaseModel):
     filenames: list[str] = []
     result_files: Optional[list[str]] = None
     dry_run: bool = True
+
+    @field_validator("filenames", "result_files")
+    @classmethod
+    def result_files_must_not_be_blank(cls, value: Optional[list[str]]) -> Optional[list[str]]:
+        if value is None:
+            return value
+        if len(value) == 0:
+            return value
+        if any(not item.strip() for item in value):
+            raise ValueError("result files must not contain blank values")
+        return value
 
 
 def _compare_files(req: CompareRequest) -> list[str]:
