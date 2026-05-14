@@ -349,6 +349,66 @@
     "data": {},
     "models": {},
     "backtest": {},
-    "signals": {}
+    "signals": {
+      "title": "Signals Console",
+      "generate": {
+        "title": "Daily Signal"
+      },
+      "rebalance": {
+        "title": "Rebalance"
+      },
+      "notify": {
+        "title": "Notify Test"
+      },
+      "fields": {
+        "modelPath": "Model",
+        "configOverride": "Config override",
+        "config": "Config",
+        "positions": "Current positions",
+        "positionDate": "Position date",
+        "minActionValue": "Min action value",
+        "notifyChannel": "Notify channel",
+        "message": "Message",
+        "dryRun": "Dry run",
+        "skipUpdate": "Skip data update",
+        "force": "Force",
+        "confirmSend": "Confirm real send"
+      },
+      "actions": {
+        "preview": "Preview",
+        "submit": "Submit",
+        "rebalanceReal": "Run real rebalance",
+        "notifyReal": "Send real test",
+        "refresh": "Refresh"
+      },
+      "confirm": {
+        "rebalanceTitle": "Confirm real rebalance",
+        "rebalanceImpact": "This will run the rebalance path with dry_run=false and may send real notifications.",
+        "notifyTitle": "Confirm real notify test",
+        "notifyImpact": "This will send a real notification test through the selected channel.",
+        "confirmRealSend": "Confirm real send"
+      },
+      "history": {
+        "tasks": "Task history",
+        "task": "Task",
+        "created": "Created",
+        "realSend": "Real send",
+        "results": "Result paths",
+        "files": "Signal files",
+        "noTasks": "No signal tasks yet.",
+        "noFiles": "No signal files found."
+      },
+      "inspect": {
+        "regime": "Regime status",
+        "file": "Signal file",
+        "enabled": "Enabled",
+        "disabled": "Disabled",
+        "noFile": "No signal file selected."
+      },
+      "overview": {
+        "recentSignals": "Signals in last 7 days",
+        "totalFiles": "Total signal files"
+      }
+    }
   }
 }
