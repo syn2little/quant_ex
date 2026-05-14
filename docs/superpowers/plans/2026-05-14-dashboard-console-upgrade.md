@@ -1028,7 +1028,7 @@ git commit -m "feat(web): add useTaskTracking + useDryRunPreview hooks"
 - Create: `web/frontend/src/components/console/DryRunPreview.tsx`
 - Create: `web/frontend/src/components/console/ConfirmDialog.tsx`
 
-- [ ] **Step 1: 写 ExecutionForm.tsx**
+- [x] **Step 1: 写 ExecutionForm.tsx**
 
 ```tsx
 import { ReactNode } from "react";
@@ -1089,7 +1089,7 @@ export function ExecutionForm<TParams extends Record<string, unknown>>({
 
 注意:如果项目尚未装 `react-hook-form` + `@hookform/resolvers` + `zod`,先检查 `web/frontend/package.json`,**若缺则在本任务一并装**(此 plan 范围内允许加这三个前端库,它们是表单工程必需,不算"新功能依赖")。
 
-- [ ] **Step 2: 检查依赖**
+- [x] **Step 2: 检查依赖**
 
 ```bash
 cd web/frontend && grep -E '"(react-hook-form|zod|@hookform/resolvers)"' package.json
@@ -1101,7 +1101,7 @@ cd web/frontend && grep -E '"(react-hook-form|zod|@hookform/resolvers)"' package
 cd web/frontend && npm install react-hook-form zod @hookform/resolvers
 ```
 
-- [ ] **Step 3: 写 DryRunPreview.tsx**
+- [x] **Step 3: 写 DryRunPreview.tsx**
 
 ```tsx
 import { ReactNode } from "react";
@@ -1125,7 +1125,7 @@ export function DryRunPreview({ loading, error, preview, renderPreview }: DryRun
 }
 ```
 
-- [ ] **Step 4: 写 ConfirmDialog.tsx**
+- [x] **Step 4: 写 ConfirmDialog.tsx**
 
 ```tsx
 import { ReactNode } from "react";
@@ -1175,7 +1175,7 @@ export function ConfirmDialog({
 }
 ```
 
-- [ ] **Step 5: TypeScript 编译**
+- [x] **Step 5: TypeScript 编译**
 
 ```bash
 cd web/frontend && npx tsc --noEmit
@@ -1183,7 +1183,7 @@ cd web/frontend && npx tsc --noEmit
 
 Expected: 无错误。
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add web/frontend/src/components/console/ExecutionForm.tsx web/frontend/src/components/console/DryRunPreview.tsx web/frontend/src/components/console/ConfirmDialog.tsx web/frontend/package.json web/frontend/package-lock.json
