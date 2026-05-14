@@ -3,7 +3,7 @@ from pathlib import Path
 
 from agent.strategy_iteration.context import build_project_context
 from agent.strategy_iteration.evaluator import generate_feedback, parse_metric_snapshot
-from agent.strategy_iteration.llm import OpenAICompatibleChatClient
+from agent.strategy_iteration.llm import OpenAICompatibleChatClient, _repair_mojibake
 from agent.strategy_iteration.execution import (
     EXPENSIVE_TAG,
     SAFE_LOCAL_TAG,
@@ -128,6 +128,24 @@ def test_role_runner_attaches_schema_and_carryover():
     assert all(isinstance(report.schema_warnings, list) for report in reports)
 
 
+def test_role_report_preserves_dict_proposals_as_readable_json():
+    report = RoleReport.from_dict(
+        "data_factor_analyst",
+        {
+            "role": "data_factor_analyst",
+            "thesis": "x",
+            "proposals": [
+                {
+                    "name": "northbound",
+                    "description": "ååèµé",
+                }
+            ],
+        },
+    )
+
+    assert report.proposals == ['{"name": "northbound", "description": "北向资金"}']
+
+
 def test_role_schema_registry_covers_default_roles():
     missing = [role.name for role in DEFAULT_ROLES if role.name not in ROLE_REQUIRED_FIELDS]
     assert missing == []
@@ -194,6 +212,20 @@ def test_llm_stream_content_parser():
             yield "data: [DONE]"
 
     assert OpenAICompatibleChatClient._read_stream_content(FakeResponse()) == '{"ok":true}'
+
+
+def test_llm_parse_repairs_utf8_mojibake():
+    payload = {
+        "thesis": "ååèµéç ç©¶å¯ä»¥ç»§ç»­",
+        "evidence": ["ç¹ä½é£é©"],
+        "plain": "northbound research",
+    }
+
+    repaired = _repair_mojibake(payload)
+
+    assert repaired["thesis"] == "北向资金研究可以继续"
+    assert repaired["evidence"] == ["点位风险"]
+    assert repaired["plain"] == "northbound research"
 
 
 def test_llm_tier_model_env_override(monkeypatch):

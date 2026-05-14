@@ -9,6 +9,36 @@ from typing import Any, Dict, Optional
 import requests
 
 
+def _mojibake_score(value: str) -> int:
+    markers = ("Ã", "Â", "â€", "â", "ã€", "ï¼", "ï½", "å", "æ", "ç", "è", "é")
+    c1_controls = sum(1 for char in value if 0x80 <= ord(char) <= 0x9F)
+    return c1_controls * 4 + sum(value.count(marker) for marker in markers)
+
+
+def _cjk_count(value: str) -> int:
+    return sum(1 for char in value if "\u4e00" <= char <= "\u9fff")
+
+
+def _repair_mojibake(value: Any) -> Any:
+    """Repair common UTF-8-as-Latin-1 mojibake from OpenAI-compatible proxies."""
+    if isinstance(value, str):
+        try:
+            repaired = value.encode("latin1").decode("utf-8")
+        except UnicodeError:
+            return value
+        if _mojibake_score(repaired) < _mojibake_score(value) or _cjk_count(repaired) > _cjk_count(value):
+            return repaired
+        return value
+    if isinstance(value, list):
+        return [_repair_mojibake(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            _repair_mojibake(key) if isinstance(key, str) else key: _repair_mojibake(item)
+            for key, item in value.items()
+        }
+    return value
+
+
 def _first_env(*names: str) -> Optional[str]:
     for name in names:
         value = os.environ.get(name)
@@ -108,6 +138,7 @@ class OpenAICompatibleChatClient:
             timeout=self.timeout,
         )
         response.raise_for_status()
+        response.encoding = "utf-8"
         if self.stream:
             content = self._read_stream_content(response)
             return self._parse_json(content)
@@ -138,10 +169,12 @@ class OpenAICompatibleChatClient:
     def _parse_json(text: str) -> Dict[str, Any]:
         try:
             data = json.loads(text)
-            return data if isinstance(data, dict) else {"value": data}
+            data = data if isinstance(data, dict) else {"value": data}
+            return _repair_mojibake(data)
         except json.JSONDecodeError:
             match = re.search(r"\{[\s\S]*\}", text)
             if not match:
                 raise
             data = json.loads(match.group())
-            return data if isinstance(data, dict) else {"value": data}
+            data = data if isinstance(data, dict) else {"value": data}
+            return _repair_mojibake(data)

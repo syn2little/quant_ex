@@ -6,12 +6,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+import yaml
 from fastapi import HTTPException
 
 from quant_ex.agent.strategy_iteration import (
     StrategyIterationOrchestrator,
     attach_feedback_candidates,
     build_command_plan,
+    execute_approved_commands,
+    execute_safe_commands,
+    generate_feedback,
     save_approval_template,
     save_command_plan,
 )
@@ -48,7 +52,7 @@ def list_agent_runs() -> list[dict[str, Any]]:
 def get_agent_run(run_id: str) -> dict[str, Any]:
     run_dir = _safe_run_dir(run_id)
     summary = _summarize_run(run_dir)
-    payload: dict[str, Any] = {**summary, "artifacts": {}}
+    payload: dict[str, Any] = {**summary, "approval_entries": _read_approval_entries(run_dir), "artifacts": {}}
 
     for name in JSON_ARTIFACTS:
         parsed = _read_json(run_dir / name)
@@ -95,7 +99,7 @@ def create_agent_run(
             save_approval_template(command_plan, run_dir)
 
     summary = _summarize_run(run_dir)
-    return {"run_id": run.run_id, **_artifact_flags(summary)}
+    return {"run_id": run.run_id, "status": summary["status"], **_artifact_flags(summary)}
 
 
 def regenerate_approval_template(run_id: str) -> dict[str, Any]:
@@ -103,7 +107,125 @@ def regenerate_approval_template(run_id: str) -> dict[str, Any]:
     command_plan = _load_command_plan(run_dir)
     save_approval_template(command_plan, run_dir)
     summary = _summarize_run(run_dir)
-    return {"run_id": summary["run_id"], **_artifact_flags(summary)}
+    return {"run_id": summary["run_id"], "status": summary["status"], **_artifact_flags(summary)}
+
+
+def update_command_approval(
+    run_id: str,
+    command_id: str,
+    *,
+    approved: bool,
+    approved_by: str = "web",
+    reason: str = "",
+) -> dict[str, Any]:
+    run_dir = _safe_run_dir(run_id)
+    command_plan = _load_command_plan(run_dir)
+    proposal = next((item for item in command_plan.commands if item.command_id == command_id), None)
+    if proposal is None:
+        raise HTTPException(status_code=404, detail="Command not found")
+
+    template_path = run_dir / "approval_template.yaml"
+    if not template_path.exists():
+        save_approval_template(command_plan, run_dir)
+    payload = yaml.safe_load(template_path.read_text(encoding="utf-8")) or {}
+    payload["run_id"] = command_plan.run_id
+    approvals = payload.get("approvals") or []
+    by_id = {str(item.get("command_id") or ""): item for item in approvals if isinstance(item, dict)}
+    entry = by_id.get(command_id)
+    if entry is None:
+        entry = {
+            "command_id": proposal.command_id,
+            "command_sha256": proposal.command_sha256,
+            "risk_tags": proposal.risk_tags,
+            "command": proposal.command,
+        }
+        approvals.append(entry)
+    entry.update(
+        {
+            "command_sha256": proposal.command_sha256,
+            "approved": approved,
+            "approved_by": approved_by if approved else "",
+            "reason": reason,
+            "approved_at": datetime.now().isoformat(timespec="seconds") if approved else "",
+            "risk_tags": proposal.risk_tags,
+            "command": proposal.command,
+        }
+    )
+    payload["approvals"] = approvals
+    template_path.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    summary = _summarize_run(run_dir)
+    return {"run_id": summary["run_id"], "status": summary["status"], "approval_entries": _read_approval_entries(run_dir)}
+
+
+def execute_agent_run_safe(run_id: str, *, command_ids: list[str] | None = None) -> dict[str, Any]:
+    run_dir = _safe_run_dir(run_id)
+    command_plan = _load_command_plan(run_dir)
+    selected_plan = _select_commands(command_plan, command_ids)
+    selected_plan = execute_safe_commands(selected_plan, root=PROJECT_ROOT)
+    command_plan.results = _merge_results(command_plan.results, selected_plan.results)
+    command_plan = attach_feedback_candidates(command_plan, root=PROJECT_ROOT)
+    save_command_plan(command_plan, run_dir)
+    summary = _summarize_run(run_dir)
+    return {"run_id": summary["run_id"], "status": summary["status"], **_artifact_flags(summary)}
+
+
+def execute_agent_run_approved(
+    run_id: str,
+    *,
+    include_safe: bool = False,
+    command_ids: list[str] | None = None,
+) -> dict[str, Any]:
+    run_dir = _safe_run_dir(run_id)
+    approval_file = run_dir / "approval_template.yaml"
+    if not approval_file.exists():
+        raise HTTPException(status_code=404, detail="Approval template not found")
+    command_plan = _load_command_plan(run_dir)
+    selected_plan = _select_commands(command_plan, command_ids)
+    selected_plan = execute_approved_commands(
+        selected_plan,
+        approval_file=approval_file,
+        root=PROJECT_ROOT,
+        include_safe=include_safe,
+    )
+    command_plan.results = _merge_results(command_plan.results, selected_plan.results)
+    command_plan = attach_feedback_candidates(command_plan, root=PROJECT_ROOT)
+    save_command_plan(command_plan, run_dir)
+    summary = _summarize_run(run_dir)
+    return {"run_id": summary["run_id"], "status": summary["status"], **_artifact_flags(summary)}
+
+
+def generate_agent_run_feedback(
+    run_id: str,
+    command_id: str,
+    *,
+    control_csv: str | None = None,
+    rank_metric: str | None = None,
+) -> dict[str, Any]:
+    run_dir = _safe_run_dir(run_id)
+    command_plan = attach_feedback_candidates(_load_command_plan(run_dir), root=PROJECT_ROOT)
+    candidate = next((item for item in command_plan.feedback_candidates if item.command_id == command_id), None)
+    if candidate is None:
+        raise HTTPException(status_code=404, detail="Feedback candidate not found")
+    if not candidate.ready:
+        raise HTTPException(status_code=400, detail="Feedback candidate result CSV is not ready")
+    result_csv = Path(candidate.result_csv)
+    if not result_csv.is_absolute():
+        result_csv = PROJECT_ROOT / result_csv
+    feedback = generate_feedback(
+        run_id=run_id,
+        result_csv=result_csv,
+        result_kind=candidate.result_kind,
+        control_csv=control_csv,
+        rank_metric=rank_metric,
+    )
+    (run_dir / "feedback.json").write_text(
+        json.dumps(feedback.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (run_dir / "feedback.md").write_text(feedback.to_markdown(), encoding="utf-8")
+    save_command_plan(command_plan, run_dir)
+    summary = _summarize_run(run_dir)
+    return {"run_id": summary["run_id"], "status": summary["status"], "feedback_decision": feedback.decision}
 
 
 def _safe_run_dir(run_id: str) -> Path:
@@ -130,11 +252,14 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
     commands = commands_payload.get("commands") or []
     results = commands_payload.get("results") or []
     feedback_candidates = commands_payload.get("feedback_candidates") or []
+    approvals = _read_approval_entries(run_dir)
     stat = run_dir.stat()
 
     return {
         "run_id": run_dir.name,
         "objective": run_payload.get("objective"),
+        "status": _derive_run_status(run_payload, commands_payload, feedback_payload, run_dir),
+        "feedback_decision": (feedback_payload or {}).get("decision"),
         "generated_at": run_payload.get("generated_at"),
         "modified_at": datetime.fromtimestamp(stat.st_mtime).isoformat(timespec="seconds"),
         "has_plan": (run_dir / "plan.md").exists(),
@@ -145,7 +270,45 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
         "commands_count": len(commands),
         "results_count": len(results),
         "feedback_candidates_count": len(feedback_candidates),
+        "approved_commands_count": len([item for item in approvals if item.get("approved")]),
     }
+
+
+def _derive_run_status(
+    run_payload: dict[str, Any],
+    commands_payload: dict[str, Any],
+    feedback_payload: dict[str, Any] | None,
+    run_dir: Path,
+) -> str:
+    """Derive a display status for historical agent runs that predate status persistence."""
+    if feedback_payload is not None:
+        return "completed"
+
+    results = commands_payload.get("results") or []
+    if any(not item.get("skipped") and item.get("returncode") not in {0, None} for item in results):
+        return "failed"
+
+    commands = commands_payload.get("commands") or []
+    if commands:
+        successful_ids = {
+            str(item.get("command_id") or "")
+            for item in results
+            if not item.get("skipped") and item.get("returncode") == 0
+        }
+        pending_protected = [
+            item
+            for item in commands
+            if item.get("requires_approval") and str(item.get("command_id") or "") not in successful_ids
+        ]
+        if pending_protected:
+            return "needs_approval"
+        if results and all(item.get("returncode") == 0 for item in results if not item.get("skipped")):
+            return "completed"
+        return "planned"
+
+    if run_payload or (run_dir / "plan.md").exists():
+        return "planned"
+    return "artifact_only"
 
 
 def _artifact_flags(summary: dict[str, Any]) -> dict[str, bool]:
@@ -165,6 +328,43 @@ def _read_json(path: Path) -> Any | None:
         return json.loads(path.read_text(encoding="utf-8"))
     except json.JSONDecodeError as exc:
         raise HTTPException(status_code=500, detail=f"Invalid JSON artifact: {path.name}") from exc
+
+
+def _read_approval_entries(run_dir: Path) -> list[dict[str, Any]]:
+    path = run_dir / "approval_template.yaml"
+    if not path.exists():
+        return []
+    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    approvals = payload.get("approvals") or []
+    return [item for item in approvals if isinstance(item, dict)]
+
+
+def _select_commands(command_plan: CommandExecutionPlan, command_ids: list[str] | None) -> CommandExecutionPlan:
+    if command_ids is None:
+        return command_plan
+    requested = {str(item) for item in command_ids if str(item)}
+    known = {item.command_id for item in command_plan.commands}
+    missing = sorted(requested - known)
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Command not found: {', '.join(missing)}")
+    return CommandExecutionPlan(
+        run_id=command_plan.run_id,
+        generated_at=command_plan.generated_at,
+        policy=command_plan.policy,
+        commands=[item for item in command_plan.commands if item.command_id in requested],
+        results=[item for item in command_plan.results if item.command_id in requested],
+        feedback_candidates=[item for item in command_plan.feedback_candidates if item.command_id in requested],
+    )
+
+
+def _merge_results(
+    existing: list[CommandExecutionResult],
+    updates: list[CommandExecutionResult],
+) -> list[CommandExecutionResult]:
+    by_id = {item.command_id: item for item in existing}
+    for item in updates:
+        by_id[item.command_id] = item
+    return list(by_id.values())
 
 
 def _load_command_plan(run_dir: Path) -> CommandExecutionPlan:

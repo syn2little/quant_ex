@@ -50,6 +50,7 @@ export function useSSE(taskId: string | null) {
                   setEvents((prev) => [...prev, event]);
                   if (event.type === "error") {
                     setError(event.data.message as string);
+                    setStatus("error");
                   }
                   if (event.type === "done") {
                     setStatus("done");

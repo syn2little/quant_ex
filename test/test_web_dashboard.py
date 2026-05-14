@@ -1,9 +1,12 @@
 import json
 
 import pandas as pd
+import pytest
 from fastapi.testclient import TestClient
 
+from quant_ex.agent.strategy_iteration.schemas import CommandExecutionPlan, CommandProposal
 from web.api.app import create_app
+from web.api.routers import agents as agents_router
 from web.api.routers import backtest as backtest_router
 from web.api.routers import data as data_router
 from web.api.routers import signals as signals_router
@@ -216,12 +219,63 @@ def test_agent_runs_list_and_detail_are_read_only(monkeypatch, tmp_path):
 
     assert list_response.status_code == 200
     assert list_response.json()[0]["run_id"] == "demo_run"
+    assert list_response.json()[0]["status"] == "planned"
     assert list_response.json()[0]["commands_count"] == 1
     assert list_response.json()[0]["feedback_candidates_count"] == 1
     assert detail_response.status_code == 200
+    assert detail_response.json()["status"] == "planned"
     assert detail_response.json()["artifacts"]["plan.md"] == "# plan\n"
     assert detail_response.json()["artifacts"]["commands.json"]["run_id"] == "demo_run"
     assert traversal_response.status_code in {400, 404}
+
+
+def test_agent_runs_status_is_derived_from_artifacts(monkeypatch, tmp_path):
+    runs_dir = tmp_path / "agent_runs"
+    feedback_dir = runs_dir / "feedback_run"
+    feedback_dir.mkdir(parents=True)
+    (feedback_dir / "run.json").write_text(
+        json.dumps(
+            {
+                "run_id": "feedback_run",
+                "objective": "evaluate result",
+                "generated_at": "2026-05-13T10:00:00",
+            }
+        ),
+        encoding="utf-8",
+    )
+    (feedback_dir / "feedback.json").write_text(
+        json.dumps({"run_id": "feedback_run", "decision": "reject"}),
+        encoding="utf-8",
+    )
+
+    approval_dir = runs_dir / "approval_run"
+    approval_dir.mkdir()
+    (approval_dir / "run.json").write_text(
+        json.dumps({"run_id": "approval_run", "objective": "approve commands"}),
+        encoding="utf-8",
+    )
+    (approval_dir / "commands.json").write_text(
+        json.dumps(
+            {
+                "run_id": "approval_run",
+                "commands": [{"command_id": "cmd_001", "requires_approval": True}],
+                "results": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(agent_service, "AGENT_RUNS_DIR", runs_dir)
+
+    client = TestClient(create_app())
+
+    feedback_response = client.get("/api/agents/runs/feedback_run")
+    approval_response = client.get("/api/agents/runs/approval_run")
+
+    assert feedback_response.status_code == 200
+    assert feedback_response.json()["status"] == "completed"
+    assert feedback_response.json()["feedback_decision"] == "reject"
+    assert approval_response.status_code == 200
+    assert approval_response.json()["status"] == "needs_approval"
 
 
 def test_agent_create_run_writes_plan_and_command_artifacts(monkeypatch, tmp_path):
@@ -243,6 +297,24 @@ def test_agent_create_run_writes_plan_and_command_artifacts(monkeypatch, tmp_pat
     assert payload["has_approval_template"] is True
     assert (runs_dir / "phase5_api_smoke" / "run.json").exists()
     assert (runs_dir / "phase5_api_smoke" / "commands.json").exists()
+
+
+def test_agent_create_with_llm_returns_background_task(monkeypatch):
+    def fake_create_agent_run(**kwargs):
+        return {"run_id": kwargs["run_id"] or "fake_agent_run", "status": "completed"}
+
+    monkeypatch.setattr(agents_router, "create_agent_run", fake_create_agent_run)
+
+    client = TestClient(create_app())
+    response = client.post(
+        "/api/agents/runs",
+        json={"objective": "async llm create", "run_id": "async_agent_run", "use_llm": True},
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task_id"]
+    assert payload["run_id"] == "async_agent_run"
 
 
 def test_agent_approval_template_regenerates_from_saved_plan(monkeypatch, tmp_path):
@@ -267,6 +339,125 @@ def test_agent_approval_template_regenerates_from_saved_plan(monkeypatch, tmp_pa
     assert response.status_code == 200
     assert response.json()["has_approval_template"] is True
     assert (runs_dir / "approval_regen" / "approval_template.yaml").exists()
+
+
+def test_agent_approval_update_and_execute_safe_task(monkeypatch, tmp_path):
+    runs_dir = tmp_path / "agent_runs"
+    monkeypatch.setattr(agent_service, "AGENT_RUNS_DIR", runs_dir)
+    monkeypatch.setattr(agent_service, "PROJECT_ROOT", tmp_path)
+    task_calls = []
+
+    class FakeTaskManager:
+        async def start_sync_task(self, task_type, fn, *args, **kwargs):
+            task_calls.append({"task_type": task_type, "args": args, "kwargs": kwargs})
+            return "selective_task"
+
+    monkeypatch.setattr(agents_router, "get_task_manager", lambda: FakeTaskManager())
+
+    client = TestClient(create_app())
+    create_response = client.post(
+        "/api/agents/runs",
+        json={"objective": "approval update", "run_id": "approval_update"},
+    )
+    assert create_response.status_code == 200
+
+    approve_response = client.post(
+        "/api/agents/runs/approval_update/approvals/cmd_007",
+        json={"approved": True, "approved_by": "test", "reason": "unit approval"},
+    )
+    assert approve_response.status_code == 200
+    assert any(
+        item["command_id"] == "cmd_007" and item["approved"] is True
+        for item in approve_response.json()["approval_entries"]
+    )
+
+    execute_response = client.post(
+        "/api/agents/runs/approval_update/execute-safe",
+        json={"command_ids": ["cmd_007"]},
+    )
+
+    assert execute_response.status_code == 200
+    assert execute_response.json()["task_id"]
+    assert execute_response.json()["run_id"] == "approval_update"
+    assert task_calls[-1]["task_type"] == "agent_execute_safe"
+    assert task_calls[-1]["args"] == ("approval_update",)
+    assert task_calls[-1]["kwargs"]["command_ids"] == ["cmd_007"]
+
+    approved_response = client.post(
+        "/api/agents/runs/approval_update/execute-approved",
+        json={"include_safe": True, "command_ids": ["cmd_007"]},
+    )
+
+    assert approved_response.status_code == 200
+    assert task_calls[-1]["task_type"] == "agent_execute_approved"
+    assert task_calls[-1]["kwargs"]["include_safe"] is True
+    assert task_calls[-1]["kwargs"]["command_ids"] == ["cmd_007"]
+
+
+def test_agent_command_selection_distinguishes_empty_from_all():
+    command_plan = CommandExecutionPlan(
+        run_id="selective_run",
+        generated_at="2026-05-14T10:00:00",
+        policy="unit",
+        commands=[
+            CommandProposal(command_id="cmd_001", command="echo one", purpose="one", source="unit"),
+            CommandProposal(command_id="cmd_002", command="echo two", purpose="two", source="unit"),
+        ],
+    )
+
+    all_plan = agent_service._select_commands(command_plan, None)
+    empty_plan = agent_service._select_commands(command_plan, [])
+    one_plan = agent_service._select_commands(command_plan, ["cmd_002"])
+
+    assert [item.command_id for item in all_plan.commands] == ["cmd_001", "cmd_002"]
+    assert empty_plan.commands == []
+    assert [item.command_id for item in one_plan.commands] == ["cmd_002"]
+    with pytest.raises(Exception, match="Command not found: missing"):
+        agent_service._select_commands(command_plan, ["missing"])
+
+
+def test_agent_feedback_generation_from_ready_candidate(monkeypatch, tmp_path):
+    runs_dir = tmp_path / "agent_runs"
+    run_dir = runs_dir / "feedback_ready"
+    result_dir = tmp_path / "backtest_results" / "agent_runs"
+    run_dir.mkdir(parents=True)
+    result_dir.mkdir(parents=True)
+    result_csv = result_dir / "feedback_ready_same_model.csv"
+    result_csv.write_text(
+        "market,topk,information_ratio,sharpe,max_drawdown\ncsi300,15,0.5,1.2,-0.1\n",
+        encoding="utf-8",
+    )
+    (run_dir / "commands.json").write_text(
+        json.dumps(
+            {
+                "run_id": "feedback_ready",
+                "generated_at": "2026-05-14T10:00:00",
+                "commands": [
+                    {
+                        "command_id": "cmd_001",
+                        "command": "./.venv/bin/python run_backtest.py --model-path models/demo.pkl --output-csv backtest_results/agent_runs/feedback_ready_same_model.csv",
+                        "purpose": "test feedback",
+                        "source": "unit",
+                        "risk_tags": ["expensive"],
+                        "requires_approval": True,
+                        "approval_reason": "unit",
+                        "timeout_seconds": 600,
+                        "command_sha256": "abc",
+                    }
+                ],
+                "results": [],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(agent_service, "AGENT_RUNS_DIR", runs_dir)
+    monkeypatch.setattr(agent_service, "PROJECT_ROOT", tmp_path)
+
+    payload = agent_service.generate_agent_run_feedback("feedback_ready", "cmd_001")
+
+    assert payload["feedback_decision"] == "hold"
+    assert (run_dir / "feedback.json").exists()
+    assert (run_dir / "feedback.md").exists()
 
 
 def test_wfv_command_includes_advanced_web_params():

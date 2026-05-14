@@ -7,23 +7,23 @@
 @import "@fontsource/dm-sans/600.css";
 
 @theme {
-  --color-terminal-bg: #0a0a0c;
-  --color-terminal-surface: #111114;
-  --color-terminal-raised: #18181b;
-  --color-terminal-border: #27272a;
-  --color-terminal-border-dim: #1e1e22;
-  --color-terminal-text: #c8ccd0;
-  --color-terminal-text-dim: #71717a;
-  --color-terminal-text-bright: #e4e4e7;
-  --color-terminal-green: #22c55e;
-  --color-terminal-green-dim: #16a34a;
-  --color-terminal-green-glow: rgba(34, 197, 94, 0.15);
-  --color-terminal-amber: #f59e0b;
-  --color-terminal-amber-glow: rgba(245, 158, 11, 0.15);
-  --color-terminal-red: #ef4444;
-  --color-terminal-red-glow: rgba(239, 68, 68, 0.15);
-  --color-terminal-cyan: #06b6d4;
-  --color-terminal-cyan-glow: rgba(6, 182, 212, 0.15);
+  --color-terminal-bg: #f6f8fb;
+  --color-terminal-surface: #ffffff;
+  --color-terminal-raised: #eef3f8;
+  --color-terminal-border: #d7e0ea;
+  --color-terminal-border-dim: #e6edf4;
+  --color-terminal-text: #334155;
+  --color-terminal-text-dim: #64748b;
+  --color-terminal-text-bright: #0f172a;
+  --color-terminal-green: #0f8f55;
+  --color-terminal-green-dim: #0b6f43;
+  --color-terminal-green-glow: rgba(15, 143, 85, 0.12);
+  --color-terminal-amber: #b7791f;
+  --color-terminal-amber-glow: rgba(183, 121, 31, 0.13);
+  --color-terminal-red: #c2414b;
+  --color-terminal-red-glow: rgba(194, 65, 75, 0.12);
+  --color-terminal-cyan: #087d9d;
+  --color-terminal-cyan-glow: rgba(8, 125, 157, 0.12);
   --font-sans: "DM Sans", system-ui, -apple-system, sans-serif;
   --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
 }
@@ -37,8 +37,8 @@ body {
 }
 
 ::selection {
-  background-color: rgba(34, 197, 94, 0.25);
-  color: #e4e4e7;
+  background-color: rgba(15, 143, 85, 0.18);
+  color: #0f172a;
 }
 
 /* Scrollbar */
@@ -50,16 +50,16 @@ body {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: #27272a;
+  background: #cbd5e1;
   border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #3f3f46;
+  background: #94a3b8;
 }
 
-/* Date input dark scheme */
+/* Date input light scheme */
 input[type="date"] {
-  color-scheme: dark;
+  color-scheme: light;
 }
 
 /* Number input spinner hide */

@@ -1,13 +1,25 @@
 from __future__ import annotations
 
+import json
 from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from hashlib import sha256
 from typing import Any, Dict, List, Optional
 
+from .llm import _repair_mojibake
+
 
 def _clean_list(values: Optional[List[str]]) -> List[str]:
-    return [str(v).strip() for v in values or [] if str(v).strip()]
+    cleaned: List[str] = []
+    for value in values or []:
+        repaired = _repair_mojibake(value)
+        if isinstance(repaired, (dict, list)):
+            text = json.dumps(repaired, ensure_ascii=False)
+        else:
+            text = str(repaired)
+        if text.strip():
+            cleaned.append(text.strip())
+    return cleaned
 
 
 @dataclass

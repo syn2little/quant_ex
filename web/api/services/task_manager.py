@@ -5,6 +5,8 @@ import asyncio
 import logging
 import uuid
 import traceback
+import json
+from functools import partial
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from enum import Enum
@@ -66,7 +68,7 @@ class TaskManager:
 
         async def _wrapper():
             loop = asyncio.get_event_loop()
-            return await loop.run_in_executor(None, fn, *args, **kwargs)
+            return await loop.run_in_executor(None, partial(fn, *args, **kwargs))
 
         bg = asyncio.create_task(self._run(task_id, _wrapper()))
         self._bg_tasks[task_id] = bg
@@ -79,7 +81,12 @@ class TaskManager:
             result = await coro
             state.status = TaskStatus.DONE
             state.result = result
-            await self._queues[task_id].put({"type": "done", "data": {"result": str(result)[:500]}})
+            try:
+                json.dumps(result)
+                event_result = result
+            except TypeError:
+                event_result = str(result)[:500]
+            await self._queues[task_id].put({"type": "done", "data": {"result": event_result}})
         except asyncio.CancelledError:
             state.status = TaskStatus.CANCELLED
             await self._queues[task_id].put({"type": "done", "data": {"status": "cancelled"}})

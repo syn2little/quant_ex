@@ -148,6 +148,8 @@ export interface AgentRunSummary {
   commands_count?: number;
   results_count?: number;
   feedback_candidates_count?: number;
+  approved_commands_count?: number;
+  approval_entries?: Record<string, unknown>[];
   artifacts?: Record<string, unknown> | string[];
   [key: string]: unknown;
 }
