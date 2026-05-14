@@ -1,5 +1,7 @@
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import type { UseFormReturn } from "react-hook-form";
 import { useTranslation } from "react-i18next";
+import { Database, Play, RefreshCw, Trash2 } from "lucide-react";
 import { Card } from "../components/ui/Card";
 import { Tabs } from "../components/ui/Tabs";
 import { Table } from "../components/ui/Table";
@@ -9,15 +11,41 @@ import { DatePicker } from "../components/ui/DatePicker";
 import { MultiSelect } from "../components/ui/MultiSelect";
 import { EChartsWrapper } from "../components/ui/EChartsWrapper";
 import { Skeleton, SkeletonTable } from "../components/ui/Skeleton";
-import { get, del, searchStocks, fetchStockQuotes, fetchSectors, fetchSectorStocks, fetchSectorRotation, fetchAltData, fetchFactorValues } from "../api/client";
-import type { StockQuote, SectorInfo, SectorRotation, AltDataResponse } from "../api/types";
+import {
+  ConfirmDialog,
+  ConsolePageLayout,
+  DryRunPreview,
+  ExecutionForm,
+} from "../components/console";
+import { useDryRunPreview } from "../hooks/useDryRunPreview";
+import { useTaskTracking } from "../hooks/useTaskTracking";
+import {
+  searchStocks,
+  fetchStockQuotes,
+  fetchSectors,
+  fetchSectorStocks,
+  fetchSectorRotation,
+  fetchAltData,
+} from "../api/client";
+import { getCacheStatus, triggerFetch, triggerPurge } from "../api/data";
+import type { CacheStatus, DataFetchPreview, DataPurgePreview } from "../api/data";
+import type { StockQuote, SectorInfo, SectorRotation, AltDataResponse, TaskState } from "../api/types";
+import { FetchSchema, PurgeSchema } from "../schemas/data";
+import type { DataType, FetchParams, PurgeParams } from "../schemas/data";
 
-const DATA_TABS = [
+const TASK_TYPE_FILTER = ["data_fetch", "data_purge", "data_fetch_dry_run", "data_purge_dry_run"];
+
+const DATA_TYPE_OPTIONS: { value: DataType; labelKey: string }[] = [
+  { value: "prices", labelKey: "console.data.dataTypePrices" },
+  { value: "financial", labelKey: "console.data.dataTypeFinancial" },
+  { value: "northbound", labelKey: "console.data.dataTypeNorthbound" },
+  { value: "sectors", labelKey: "console.data.dataTypeSectors" },
+];
+
+const INSPECT_TABS = [
   { key: "quotes", label: "Stock Quotes" },
   { key: "sectors", label: "Sectors" },
   { key: "altData", label: "Alt Data" },
-  { key: "factors", label: "Factor Values" },
-  { key: "cache", label: "Cache" },
 ];
 
 const ALT_DATA_TYPES = [
@@ -40,6 +68,464 @@ function computeMA(data: number[], period: number): (number | null)[] {
     for (let j = i - period + 1; j <= i; j++) sum += data[j];
     return sum / period;
   });
+}
+
+function formatDate(value: string | null | undefined) {
+  if (!value) return "-";
+  return new Date(value).toLocaleString();
+}
+
+function formatBytes(value: number | undefined) {
+  if (!value) return "0 B";
+  if (value < 1024 * 1024) return `${(value / 1024).toFixed(1)} KB`;
+  return `${(value / 1024 / 1024).toFixed(2)} MB`;
+}
+
+function actionButtonLabel(dryRun: boolean, previewLabel: string, submitLabel: string) {
+  return dryRun ? previewLabel : submitLabel;
+}
+
+function DataTypeCheckboxes({ form }: { form: UseFormReturn<FetchParams> }) {
+  const { t } = useTranslation();
+  const selected = form.watch("data_types") ?? [];
+
+  return (
+    <fieldset>
+      <legend className="mb-2 text-xs font-mono uppercase tracking-wider text-terminal-text-dim">
+        {t("console.data.dataTypes")}
+      </legend>
+      <div className="grid gap-2 sm:grid-cols-2">
+        {DATA_TYPE_OPTIONS.map((option) => {
+          const checked = selected.includes(option.value);
+          return (
+            <label
+              key={option.value}
+              className="flex items-center gap-2 rounded-sm border border-terminal-border px-3 py-2 text-sm text-terminal-text"
+            >
+              <input
+                type="checkbox"
+                checked={checked}
+                onChange={(event) => {
+                  const next = event.target.checked
+                    ? [...selected, option.value]
+                    : selected.filter((value) => value !== option.value);
+                  form.setValue("data_types", next, { shouldValidate: true, shouldDirty: true });
+                }}
+              />
+              {t(option.labelKey)}
+            </label>
+          );
+        })}
+      </div>
+      {form.formState.errors.data_types && (
+        <p className="mt-2 text-xs text-terminal-red">{String(form.formState.errors.data_types.message)}</p>
+      )}
+    </fieldset>
+  );
+}
+
+function FetchPreview({ preview }: { preview: DataFetchPreview }) {
+  const { t } = useTranslation();
+  return (
+    <div className="grid gap-3 text-sm sm:grid-cols-2">
+      <div>
+        <p className="text-xs font-mono uppercase text-terminal-text-dim">{t("console.data.previewFiles")}</p>
+        <p className="font-mono text-terminal-text-bright">{preview.estimated_files ?? 0}</p>
+      </div>
+      <div>
+        <p className="text-xs font-mono uppercase text-terminal-text-dim">{t("console.data.previewMinutes")}</p>
+        <p className="font-mono text-terminal-text-bright">{preview.estimated_minutes ?? 0}</p>
+      </div>
+      <div>
+        <p className="text-xs font-mono uppercase text-terminal-text-dim">{t("console.data.previewDisk")}</p>
+        <p className="font-mono text-terminal-text-bright">{preview.estimated_disk_mb ?? 0} MB</p>
+      </div>
+      <div>
+        <p className="text-xs font-mono uppercase text-terminal-text-dim">{t("console.data.previewSkipped")}</p>
+        <p className="font-mono text-terminal-text-bright">
+          {preview.skipped_cached?.length ? preview.skipped_cached.join(", ") : "-"}
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function PurgePreview({ preview }: { preview: DataPurgePreview }) {
+  const { t } = useTranslation();
+  return (
+    <div className="space-y-3 text-sm">
+      <div className="grid gap-3 sm:grid-cols-3">
+        <div>
+          <p className="text-xs font-mono uppercase text-terminal-text-dim">{t("console.data.dataType")}</p>
+          <p className="font-mono text-terminal-text-bright">{preview.data_type ?? "-"}</p>
+        </div>
+        <div>
+          <p className="text-xs font-mono uppercase text-terminal-text-dim">{t("console.data.previewFiles")}</p>
+          <p className="font-mono text-terminal-text-bright">{preview.count ?? 0}</p>
+        </div>
+        <div>
+          <p className="text-xs font-mono uppercase text-terminal-text-dim">{t("console.data.previewFreed")}</p>
+          <p className="font-mono text-terminal-text-bright">{formatBytes(preview.freed_bytes)}</p>
+        </div>
+      </div>
+      {preview.files?.length ? (
+        <ul className="max-h-40 space-y-1 overflow-auto font-mono text-xs text-terminal-text-dim">
+          {preview.files.slice(0, 20).map((file) => (
+            <li key={file}>{file}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="font-mono text-xs text-terminal-text-dim">{t("console.data.noExpiredFiles")}</p>
+      )}
+    </div>
+  );
+}
+
+function FetchActionCard({ trackTask }: { trackTask: (taskId: string) => void }) {
+  const { t } = useTranslation();
+  const preview = useDryRunPreview<FetchParams, DataFetchPreview>(triggerFetch);
+  const [confirmParams, setConfirmParams] = useState<FetchParams | null>(null);
+  const [confirming, setConfirming] = useState(false);
+
+  const dryRun = async (params: FetchParams) => {
+    const result = await preview.run({ ...params, dry_run: true });
+    trackTask(result.task_id);
+    return result;
+  };
+
+  const submit = async (params: FetchParams) => {
+    if (params.force_refresh) {
+      setConfirmParams({ ...params, dry_run: false });
+      return { task_id: "awaiting-confirmation" };
+    }
+    const result = await triggerFetch({ ...params, dry_run: false });
+    trackTask(result.task_id);
+    return result;
+  };
+
+  const confirmSubmit = async () => {
+    if (!confirmParams) return;
+    setConfirming(true);
+    try {
+      const result = await triggerFetch(confirmParams);
+      trackTask(result.task_id);
+      setConfirmParams(null);
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  return (
+    <Card title={t("console.data.fetchTitle")} accent="green">
+      <div className="mb-4 flex items-start gap-3">
+        <Database className="mt-0.5 h-5 w-5 text-terminal-green" />
+        <p className="text-sm text-terminal-text-dim">{t("console.data.fetchDescription")}</p>
+      </div>
+      <ExecutionForm<FetchParams>
+        pageKey="data"
+        actionKey="data.fetch"
+        schema={FetchSchema}
+        defaults={{
+          data_types: ["financial"],
+          date_range: { start: null, end: null },
+          force_refresh: false,
+          dry_run: true,
+        }}
+        dryRunDefault={true}
+        onDryRun={dryRun}
+        onSubmit={submit}
+        renderFields={(form) => {
+          const isDryRun = form.watch("dry_run");
+          return (
+            <>
+              <DataTypeCheckboxes form={form} />
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="block">
+                  <span className="mb-1 block text-xs font-mono uppercase tracking-wider text-terminal-text-dim">
+                    {t("console.data.startDate")}
+                  </span>
+                  <DatePicker
+                    value={form.watch("date_range")?.start ?? ""}
+                    onChange={(value) => form.setValue("date_range.start", value || null)}
+                  />
+                </label>
+                <label className="block">
+                  <span className="mb-1 block text-xs font-mono uppercase tracking-wider text-terminal-text-dim">
+                    {t("console.data.endDate")}
+                  </span>
+                  <DatePicker
+                    value={form.watch("date_range")?.end ?? ""}
+                    onChange={(value) => form.setValue("date_range.end", value || null)}
+                  />
+                </label>
+              </div>
+              <div className="flex flex-wrap gap-4 text-sm text-terminal-text">
+                <label className="inline-flex items-center gap-2">
+                  <input type="checkbox" {...form.register("force_refresh")} />
+                  {t("console.data.forceRefresh")}
+                </label>
+                <label className="inline-flex items-center gap-2">
+                  <input type="checkbox" {...form.register("dry_run")} />
+                  {t("console.common.dryRun")}
+                </label>
+              </div>
+              <button
+                type="submit"
+                className="inline-flex items-center gap-2 rounded-sm border border-terminal-green px-3 py-1.5 text-xs font-mono text-terminal-green hover:bg-terminal-green-glow"
+              >
+                {isDryRun ? <RefreshCw className="h-4 w-4" /> : <Play className="h-4 w-4" />}
+                {actionButtonLabel(
+                  isDryRun,
+                  t("console.data.previewFetch"),
+                  t("console.data.runFetch"),
+                )}
+              </button>
+            </>
+          );
+        }}
+      />
+      <div className="mt-4">
+        <DryRunPreview
+          loading={preview.loading}
+          error={preview.error}
+          preview={preview.preview}
+          renderPreview={(value) => <FetchPreview preview={value as DataFetchPreview} />}
+        />
+      </div>
+      <ConfirmDialog
+        open={!!confirmParams}
+        titleKey="console.data.confirmFetchTitle"
+        impactSummary={
+          <span>
+            {t("console.data.confirmFetchImpact")} {confirming ? t("common.loading") : ""}
+          </span>
+        }
+        confirmLabelKey="console.data.runFetch"
+        destructive
+        onConfirm={confirmSubmit}
+        onCancel={() => setConfirmParams(null)}
+      />
+    </Card>
+  );
+}
+
+function PurgeActionCard({ trackTask }: { trackTask: (taskId: string) => void }) {
+  const { t } = useTranslation();
+  const preview = useDryRunPreview<PurgeParams, DataPurgePreview>(triggerPurge);
+  const [confirmParams, setConfirmParams] = useState<PurgeParams | null>(null);
+  const [confirming, setConfirming] = useState(false);
+
+  const dryRun = async (params: PurgeParams) => {
+    const result = await preview.run({ ...params, dry_run: true });
+    trackTask(result.task_id);
+    return result;
+  };
+
+  const submit = async (params: PurgeParams) => {
+    setConfirmParams({ ...params, dry_run: false });
+    return { task_id: "awaiting-confirmation" };
+  };
+
+  const confirmSubmit = async () => {
+    if (!confirmParams) return;
+    setConfirming(true);
+    try {
+      const result = await triggerPurge(confirmParams);
+      trackTask(result.task_id);
+      setConfirmParams(null);
+    } finally {
+      setConfirming(false);
+    }
+  };
+
+  return (
+    <Card title={t("console.data.purgeTitle")} accent="red">
+      <div className="mb-4 flex items-start gap-3">
+        <Trash2 className="mt-0.5 h-5 w-5 text-terminal-red" />
+        <p className="text-sm text-terminal-text-dim">{t("console.data.purgeDescription")}</p>
+      </div>
+      <ExecutionForm<PurgeParams>
+        pageKey="data"
+        actionKey="data.purge_expired"
+        schema={PurgeSchema}
+        defaults={{ data_type: "financial", dry_run: true }}
+        dryRunDefault={true}
+        destructive
+        onDryRun={dryRun}
+        onSubmit={submit}
+        renderFields={(form) => {
+          const isDryRun = form.watch("dry_run");
+          return (
+            <>
+              <label className="block">
+                <span className="mb-1 block text-xs font-mono uppercase tracking-wider text-terminal-text-dim">
+                  {t("console.data.dataType")}
+                </span>
+                <Select
+                  value={form.watch("data_type")}
+                  onChange={(value) => form.setValue("data_type", value as DataType)}
+                  options={DATA_TYPE_OPTIONS.map((option) => ({
+                    value: option.value,
+                    label: t(option.labelKey),
+                  }))}
+                />
+              </label>
+              <label className="inline-flex items-center gap-2 text-sm text-terminal-text">
+                <input type="checkbox" {...form.register("dry_run")} />
+                {t("console.common.dryRun")}
+              </label>
+              <button
+                type="submit"
+                className="inline-flex items-center gap-2 rounded-sm border border-terminal-red px-3 py-1.5 text-xs font-mono text-terminal-red hover:bg-terminal-red-glow"
+              >
+                {isDryRun ? <RefreshCw className="h-4 w-4" /> : <Trash2 className="h-4 w-4" />}
+                {actionButtonLabel(
+                  isDryRun,
+                  t("console.data.previewPurge"),
+                  t("console.data.runPurge"),
+                )}
+              </button>
+            </>
+          );
+        }}
+      />
+      <div className="mt-4">
+        <DryRunPreview
+          loading={preview.loading}
+          error={preview.error}
+          preview={preview.preview}
+          renderPreview={(value) => <PurgePreview preview={value as DataPurgePreview} />}
+        />
+      </div>
+      <ConfirmDialog
+        open={!!confirmParams}
+        titleKey="console.data.confirmPurgeTitle"
+        impactSummary={
+          <span>
+            {t("console.data.confirmPurgeImpact")} {confirming ? t("common.loading") : ""}
+          </span>
+        }
+        confirmLabelKey="console.data.runPurge"
+        destructive
+        onConfirm={confirmSubmit}
+        onCancel={() => setConfirmParams(null)}
+      />
+    </Card>
+  );
+}
+
+function ExecuteTab() {
+  const { trackTask } = useTaskTracking({ pageKey: "data", taskTypeFilter: TASK_TYPE_FILTER });
+  return (
+    <div className="grid gap-4 lg:grid-cols-2">
+      <FetchActionCard trackTask={trackTask} />
+      <PurgeActionCard trackTask={trackTask} />
+    </div>
+  );
+}
+
+function useCacheStatus() {
+  const [cache, setCache] = useState<CacheStatus[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  const refresh = useCallback(() => {
+    setLoading(true);
+    getCacheStatus()
+      .then(setCache)
+      .catch(() => setCache([]))
+      .finally(() => setLoading(false));
+  }, []);
+
+  useEffect(refresh, [refresh]);
+
+  return { cache, loading, refresh };
+}
+
+function OverviewTab() {
+  const { t } = useTranslation();
+  const { cache, loading } = useCacheStatus();
+  const { tasks } = useTaskTracking({ pageKey: "data", taskTypeFilter: TASK_TYPE_FILTER });
+  const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
+  const recentTaskCount = tasks.filter((task) => new Date(task.created_at).getTime() >= sevenDaysAgo).length;
+  const totalFiles = cache.reduce((sum, item) => sum + item.file_count, 0);
+  const totalSize = cache.reduce((sum, item) => sum + item.total_size_mb, 0);
+
+  return (
+    <div className="grid gap-4 md:grid-cols-3">
+      <Card title={t("console.data.cacheFiles")} accent="green">
+        <p className="font-mono text-3xl text-terminal-text-bright">{loading ? "-" : totalFiles}</p>
+      </Card>
+      <Card title={t("console.data.cacheSize")} accent="cyan">
+        <p className="font-mono text-3xl text-terminal-text-bright">{loading ? "-" : totalSize.toFixed(2)} MB</p>
+      </Card>
+      <Card title={t("console.data.recentTasks")} accent="amber">
+        <p className="font-mono text-3xl text-terminal-text-bright">{recentTaskCount}</p>
+      </Card>
+    </div>
+  );
+}
+
+function HistoryTab() {
+  const { t } = useTranslation();
+  const { tasks, refresh: refreshTasks } = useTaskTracking({ pageKey: "data", taskTypeFilter: TASK_TYPE_FILTER });
+  const { cache, loading: cacheLoading, refresh: refreshCache } = useCacheStatus();
+  const thirtyDaysAgo = Date.now() - 30 * 24 * 60 * 60 * 1000;
+  const recentTasks = tasks.filter((task) => new Date(task.created_at).getTime() >= thirtyDaysAgo);
+
+  const refreshAll = () => {
+    refreshTasks();
+    refreshCache();
+  };
+
+  return (
+    <div className="space-y-4">
+      <Card
+        title={t("console.data.taskHistory")}
+        actions={
+          <button
+            type="button"
+            onClick={refreshAll}
+            className="inline-flex items-center gap-1 rounded-sm border border-terminal-border px-2 py-1 text-xs font-mono text-terminal-text-dim hover:text-terminal-text"
+          >
+            <RefreshCw className="h-3.5 w-3.5" />
+            {t("console.data.refresh")}
+          </button>
+        }
+      >
+        <Table<TaskState & Record<string, unknown>>
+          columns={[
+            { key: "created_at", label: t("console.data.createdAt"), render: (row) => formatDate(row.created_at) },
+            { key: "task_type", label: t("console.data.taskType"), sortable: true },
+            { key: "action_key", label: t("console.data.actionKey"), sortable: true },
+            { key: "status", label: t("console.data.status"), sortable: true },
+            { key: "error", label: t("console.data.error"), render: (row) => row.error ?? "-" },
+          ]}
+          data={recentTasks as (TaskState & Record<string, unknown>)[]}
+          pageSize={10}
+          rowKey="task_id"
+          emptyMessage={t("console.data.noTasks")}
+        />
+      </Card>
+      <Card title={t("console.data.cacheFingerprint")}>
+        {cacheLoading ? (
+          <SkeletonTable rows={5} />
+        ) : (
+          <Table<CacheStatus & Record<string, unknown>>
+            columns={[
+              { key: "type", label: t("console.data.dataType"), sortable: true },
+              { key: "file_count", label: t("console.data.files"), align: "right", sortable: true },
+              { key: "total_size_mb", label: t("console.data.sizeMb"), align: "right", sortable: true },
+              { key: "latest", label: t("console.data.latest"), render: (row) => formatDate(row.latest) },
+              { key: "ttl_days", label: t("console.data.ttlDays"), align: "right" },
+            ]}
+            data={cache as (CacheStatus & Record<string, unknown>)[]}
+            pageSize={10}
+            rowKey="type"
+          />
+        )}
+      </Card>
+    </div>
+  );
 }
 
 function StockQuotesTab() {
@@ -88,14 +574,14 @@ function StockQuotesTab() {
 
   const chartOption = quotes.length > 0 ? {
     tooltip: { trigger: "axis", axisPointer: { type: "cross" } },
-    legend: { data: ["K线", "Volume", ...overlays.map(o => o.toUpperCase())], textStyle: { color: "#71717a" } },
+    legend: { data: ["Kline", "Volume", ...overlays.map((o) => o.toUpperCase())], textStyle: { color: "#71717a" } },
     grid: [
       { left: 60, right: 20, top: 40, height: "55%" },
       { left: 60, right: 20, top: "72%", height: "18%" },
     ],
     xAxis: [
-      { type: "category", data: quotes.map(q => q.date), gridIndex: 0, axisLine: { lineStyle: { color: "#27272a" } }, axisLabel: { color: "#71717a", fontSize: 10 } },
-      { type: "category", data: quotes.map(q => q.date), gridIndex: 1, axisLabel: { show: false } },
+      { type: "category", data: quotes.map((q) => q.date), gridIndex: 0, axisLine: { lineStyle: { color: "#27272a" } }, axisLabel: { color: "#71717a", fontSize: 10 } },
+      { type: "category", data: quotes.map((q) => q.date), gridIndex: 1, axisLabel: { show: false } },
     ],
     yAxis: [
       { type: "value", gridIndex: 0, scale: true, splitLine: { lineStyle: { color: "#1e1e22" } }, axisLabel: { color: "#71717a", fontSize: 10 } },
@@ -107,11 +593,11 @@ function StockQuotesTab() {
     ],
     series: [
       {
-        name: "K线",
+        name: "Kline",
         type: "candlestick",
         xAxisIndex: 0,
         yAxisIndex: 0,
-        data: quotes.map(q => [q.open, q.close, q.low, q.high]),
+        data: quotes.map((q) => [q.open, q.close, q.low, q.high]),
         itemStyle: { color: "#22c55e", color0: "#ef4444", borderColor: "#22c55e", borderColor0: "#ef4444" },
       },
       {
@@ -119,8 +605,8 @@ function StockQuotesTab() {
         type: "bar",
         xAxisIndex: 1,
         yAxisIndex: 1,
-        data: quotes.map(q => [q.volume, q.close >= q.open ? "#22c55e" : "#ef4444"]),
-        itemStyle: { color: (params: any) => params.data?.[1] || "#22c55e" },
+        data: quotes.map((q) => [q.volume, q.close >= q.open ? "#22c55e" : "#ef4444"]),
+        itemStyle: { color: (params: { data?: [number, string] }) => params.data?.[1] || "#22c55e" },
         encode: { y: 0 },
       },
       ...(overlays.includes("ma5") ? [{
@@ -128,7 +614,7 @@ function StockQuotesTab() {
         type: "line",
         xAxisIndex: 0,
         yAxisIndex: 0,
-        data: computeMA(quotes.map(q => q.close), 5),
+        data: computeMA(quotes.map((q) => q.close), 5),
         smooth: true,
         lineStyle: { width: 1, color: "#f59e0b" },
         symbol: "none",
@@ -138,7 +624,7 @@ function StockQuotesTab() {
         type: "line",
         xAxisIndex: 0,
         yAxisIndex: 0,
-        data: computeMA(quotes.map(q => q.close), 20),
+        data: computeMA(quotes.map((q) => q.close), 20),
         smooth: true,
         lineStyle: { width: 1, color: "#06b6d4" },
         symbol: "none",
@@ -148,35 +634,34 @@ function StockQuotesTab() {
 
   return (
     <div className="flex gap-4">
-      {/* Left sidebar */}
-      <div className="w-72 space-y-4 shrink-0">
+      <div className="w-72 shrink-0 space-y-4">
         <Card>
-          <p className="text-xs text-terminal-text-dim uppercase mb-2 font-mono tracking-wider">{t("dataExplorer.search")}</p>
-          <SearchInput value={query} onChange={handleSearch} placeholder="600519 / 茅台" />
+          <p className="mb-2 text-xs font-mono uppercase tracking-wider text-terminal-text-dim">{t("dataExplorer.search")}</p>
+          <SearchInput value={query} onChange={handleSearch} placeholder="600519 / maotai" />
           {searchResults.length > 0 && (
-            <div className="mt-2 bg-terminal-raised border border-terminal-border rounded-sm max-h-48 overflow-auto">
-              {searchResults.map((r) => (
+            <div className="mt-2 max-h-48 overflow-auto rounded-sm border border-terminal-border bg-terminal-raised">
+              {searchResults.map((result) => (
                 <button
-                  key={r.symbol}
-                  onClick={() => selectStock(r.symbol, r.name)}
-                  className="w-full px-3 py-2 text-left hover:bg-terminal-border text-sm flex justify-between transition-colors"
+                  key={result.symbol}
+                  onClick={() => selectStock(result.symbol, result.name)}
+                  className="flex w-full justify-between px-3 py-2 text-left text-sm transition-colors hover:bg-terminal-border"
                 >
-                  <span className="text-terminal-text font-mono text-xs">{r.symbol}</span>
-                  <span className="text-terminal-text-dim">{r.name}</span>
+                  <span className="font-mono text-xs text-terminal-text">{result.symbol}</span>
+                  <span className="text-terminal-text-dim">{result.name}</span>
                 </button>
               ))}
             </div>
           )}
         </Card>
         <Card>
-          <p className="text-xs text-terminal-text-dim uppercase mb-2 font-mono tracking-wider">{t("dataExplorer.dateRange")}</p>
+          <p className="mb-2 text-xs font-mono uppercase tracking-wider text-terminal-text-dim">{t("dataExplorer.dateRange")}</p>
           <div className="flex gap-2">
             <DatePicker value={startDate} onChange={setStartDate} className="flex-1" />
             <DatePicker value={endDate} onChange={setEndDate} className="flex-1" />
           </div>
         </Card>
         <Card>
-          <p className="text-xs text-terminal-text-dim uppercase mb-2 font-mono tracking-wider">{t("dataExplorer.overlays")}</p>
+          <p className="mb-2 text-xs font-mono uppercase tracking-wider text-terminal-text-dim">{t("dataExplorer.overlays")}</p>
           <MultiSelect
             options={OVERLAY_OPTIONS}
             values={overlays}
@@ -187,12 +672,13 @@ function StockQuotesTab() {
         {lastQuote && (
           <Card title={selectedName || selectedSymbol}>
             <div className="space-y-1 text-sm">
-              <div className="flex justify-between"><span className="text-terminal-text-dim">Open</span><span className="text-terminal-text font-mono">{lastQuote.open?.toFixed(2)}</span></div>
-              <div className="flex justify-between"><span className="text-terminal-text-dim">High</span><span className="text-terminal-green font-mono">{lastQuote.high?.toFixed(2)}</span></div>
-              <div className="flex justify-between"><span className="text-terminal-text-dim">Low</span><span className="text-terminal-red font-mono">{lastQuote.low?.toFixed(2)}</span></div>
-              <div className="flex justify-between"><span className="text-terminal-text-dim">Close</span><span className="text-terminal-text-bright font-mono">{lastQuote.close?.toFixed(2)}</span></div>
-              <div className="flex justify-between"><span className="text-terminal-text-dim">Volume</span><span className="text-terminal-text-dim font-mono">{(lastQuote.volume / 1e4).toFixed(0)}万</span></div>
-              <div className="flex justify-between"><span className="text-terminal-text-dim">Change</span>
+              <div className="flex justify-between"><span className="text-terminal-text-dim">Open</span><span className="font-mono text-terminal-text">{lastQuote.open?.toFixed(2)}</span></div>
+              <div className="flex justify-between"><span className="text-terminal-text-dim">High</span><span className="font-mono text-terminal-green">{lastQuote.high?.toFixed(2)}</span></div>
+              <div className="flex justify-between"><span className="text-terminal-text-dim">Low</span><span className="font-mono text-terminal-red">{lastQuote.low?.toFixed(2)}</span></div>
+              <div className="flex justify-between"><span className="text-terminal-text-dim">Close</span><span className="font-mono text-terminal-text-bright">{lastQuote.close?.toFixed(2)}</span></div>
+              <div className="flex justify-between"><span className="text-terminal-text-dim">Volume</span><span className="font-mono text-terminal-text-dim">{(lastQuote.volume / 1e4).toFixed(0)}w</span></div>
+              <div className="flex justify-between">
+                <span className="text-terminal-text-dim">Change</span>
                 <span className={`font-mono ${lastQuote.change >= 0 ? "text-terminal-green" : "text-terminal-red"}`}>
                   {(lastQuote.change * 100).toFixed(2)}%
                 </span>
@@ -202,13 +688,12 @@ function StockQuotesTab() {
         )}
       </div>
 
-      {/* Right main chart area */}
       <div className="flex-1">
         {loading && <Skeleton className="h-[520px] w-full" />}
         {!loading && chartOption && <EChartsWrapper option={chartOption} height={520} />}
-        {!loading && !chartOption && selectedSymbol && <p className="text-terminal-text-dim text-sm">{t("dataExplorer.noData")}</p>}
+        {!loading && !chartOption && selectedSymbol && <p className="text-sm text-terminal-text-dim">{t("dataExplorer.noData")}</p>}
         {!selectedSymbol && (
-          <div className="flex items-center justify-center h-96 text-terminal-text-dim text-sm font-mono">
+          <div className="flex h-96 items-center justify-center text-sm font-mono text-terminal-text-dim">
             {t("dataExplorer.searchHint")}
           </div>
         )}
@@ -252,19 +737,19 @@ function SectorsTab() {
   const rotationHeatmapOption = useMemo(() => {
     if (rotation.length === 0) return null;
     const windows = Object.keys(rotation[0].returns).sort();
-    const sectorNames = rotation.map((r) => r.sector_name);
+    const sectorNames = rotation.map((item) => item.sector_name);
     const data: [number, number, number][] = [];
-    rotation.forEach((r, i) => {
-      windows.forEach((w, j) => {
-        data.push([j, i, r.returns[w] ?? 0]);
+    rotation.forEach((item, i) => {
+      windows.forEach((window, j) => {
+        data.push([j, i, item.returns[window] ?? 0]);
       });
     });
     return {
       tooltip: {
         position: "top",
-        formatter: (params: any) => {
-          const val = params.data[2];
-          return `${sectorNames[params.data[1]]} / ${windows[params.data[0]]}: ${(val * 100).toFixed(2)}%`;
+        formatter: (params: { data: [number, number, number] }) => {
+          const value = params.data[2];
+          return `${sectorNames[params.data[1]]} / ${windows[params.data[0]]}: ${(value * 100).toFixed(2)}%`;
         },
       },
       grid: { left: 120, right: 30, top: 10, bottom: 50 },
@@ -294,7 +779,7 @@ function SectorsTab() {
             show: true,
             fontSize: 9,
             color: "#c8ccd0",
-            formatter: (p: any) => `${(p.data[2] * 100).toFixed(1)}%`,
+            formatter: (params: { data: [number, number, number] }) => `${(params.data[2] * 100).toFixed(1)}%`,
           },
         },
       ],
@@ -321,16 +806,16 @@ function SectorsTab() {
           <div className="w-72">
             <Card title={selectedSector}>
               {sectorStocks.length > 0 ? (
-                <div className="max-h-96 overflow-auto space-y-1">
-                  {sectorStocks.map((s) => (
-                    <div key={s.symbol} className="flex justify-between text-sm px-2 py-1 hover:bg-terminal-raised rounded-sm transition-colors">
-                      <span className="text-terminal-text font-mono text-xs">{s.symbol}</span>
-                      <span className="text-terminal-text-dim">{s.name}</span>
+                <div className="max-h-96 space-y-1 overflow-auto">
+                  {sectorStocks.map((stock) => (
+                    <div key={stock.symbol} className="flex justify-between rounded-sm px-2 py-1 text-sm transition-colors hover:bg-terminal-raised">
+                      <span className="font-mono text-xs text-terminal-text">{stock.symbol}</span>
+                      <span className="text-terminal-text-dim">{stock.name}</span>
                     </div>
                   ))}
                 </div>
               ) : (
-                <p className="text-terminal-text-dim text-sm">{t("common.noData")}</p>
+                <p className="text-sm text-terminal-text-dim">{t("common.noData")}</p>
               )}
             </Card>
           </div>
@@ -341,7 +826,7 @@ function SectorsTab() {
           <button
             onClick={loadRotation}
             disabled={rotationLoading}
-            className="px-3 py-1.5 text-xs font-mono border border-terminal-green text-terminal-green hover:bg-terminal-green-glow transition-colors rounded-sm disabled:opacity-30"
+            className="rounded-sm border border-terminal-green px-3 py-1.5 text-xs font-mono text-terminal-green transition-colors hover:bg-terminal-green-glow disabled:opacity-30"
           >
             {rotationLoading ? t("common.loading") : "Load Rotation"}
           </button>
@@ -349,7 +834,7 @@ function SectorsTab() {
             <EChartsWrapper option={rotationHeatmapOption} height={Math.max(300, rotation.length * 28 + 60)} />
           )}
           {!rotationHeatmapOption && rotation.length === 0 && !rotationLoading && (
-            <p className="text-terminal-text-dim text-sm font-mono">Click "Load Rotation" to fetch sector returns across time windows.</p>
+            <p className="text-sm font-mono text-terminal-text-dim">Click "Load Rotation" to fetch sector returns across time windows.</p>
           )}
         </div>
       </Card>
@@ -376,24 +861,24 @@ function AltDataTab() {
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-3 items-end">
+      <div className="flex items-end gap-3">
         <div className="w-48">
-          <p className="text-xs text-terminal-text-dim uppercase mb-1 font-mono tracking-wider">Data Type</p>
+          <p className="mb-1 text-xs font-mono uppercase tracking-wider text-terminal-text-dim">Data Type</p>
           <Select
-            options={ALT_DATA_TYPES.map(t => ({ value: t, label: t }))}
+            options={ALT_DATA_TYPES.map((type) => ({ value: type, label: type }))}
             value={dataType}
             onChange={setDataType}
           />
         </div>
         <div className="w-48">
-          <p className="text-xs text-terminal-text-dim uppercase mb-1 font-mono tracking-wider">Symbol</p>
+          <p className="mb-1 text-xs font-mono uppercase tracking-wider text-terminal-text-dim">Symbol</p>
           <SearchInput value={symbol} onChange={setSymbol} placeholder="Filter symbol..." />
         </div>
         <DatePicker value={startDate} onChange={setStartDate} />
         <DatePicker value={endDate} onChange={setEndDate} />
         <button
           onClick={fetchData}
-          className="px-3 py-1.5 text-xs font-mono border border-terminal-green text-terminal-green hover:bg-terminal-green-glow transition-colors rounded-sm"
+          className="rounded-sm border border-terminal-green px-3 py-1.5 text-xs font-mono text-terminal-green transition-colors hover:bg-terminal-green-glow"
         >
           {t("common.search")}
         </button>
@@ -402,23 +887,23 @@ function AltDataTab() {
       {loading && <SkeletonTable rows={6} />}
       {data && data.rows.length > 0 && (
         <Card>
-          <p className="text-xs text-terminal-text-dim mb-2 font-mono">
+          <p className="mb-2 text-xs font-mono text-terminal-text-dim">
             {data.total} rows ({data.columns.length} cols) {data.has_more ? "(showing first 100)" : ""}
           </p>
-          <div className="overflow-x-auto max-h-96 overflow-y-auto">
+          <div className="max-h-96 overflow-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="border-b border-terminal-border sticky top-0 bg-terminal-surface">
-                  {data.columns.map((col) => (
-                    <th key={col} className="px-3 py-2 text-left text-xs text-terminal-text-dim uppercase font-mono tracking-wider">{col}</th>
+                <tr className="sticky top-0 border-b border-terminal-border bg-terminal-surface">
+                  {data.columns.map((column) => (
+                    <th key={column} className="px-3 py-2 text-left text-xs font-mono uppercase tracking-wider text-terminal-text-dim">{column}</th>
                   ))}
                 </tr>
               </thead>
               <tbody>
-                {data.rows.map((row, i) => (
-                  <tr key={i} className="border-b border-terminal-border-dim hover:bg-terminal-raised transition-colors">
-                    {data.columns.map((col) => (
-                      <td key={col} className="px-3 py-1 text-terminal-text text-xs font-mono">{String(row[col] ?? "-")}</td>
+                {data.rows.map((row, index) => (
+                  <tr key={index} className="border-b border-terminal-border-dim transition-colors hover:bg-terminal-raised">
+                    {data.columns.map((column) => (
+                      <td key={column} className="px-3 py-1 text-xs font-mono text-terminal-text">{String(row[column] ?? "-")}</td>
                     ))}
                   </tr>
                 ))}
@@ -427,163 +912,37 @@ function AltDataTab() {
           </div>
         </Card>
       )}
-      {data && data.rows.length === 0 && <p className="text-terminal-text-dim text-sm">{t("common.noData")}</p>}
+      {data && data.rows.length === 0 && <p className="text-sm text-terminal-text-dim">{t("common.noData")}</p>}
     </div>
   );
 }
 
-function FactorValuesTab() {
-  const [factorList, setFactorList] = useState<{ value: string; label: string }[]>([]);
-  const [selectedFactors, setSelectedFactors] = useState<string[]>([]);
-  const [symbols, setSymbols] = useState("");
-  const [startDate, setStartDate] = useState("");
-  const [endDate, setEndDate] = useState("");
-  const [data, setData] = useState<{ factors: string[]; data: Record<string, unknown>[] } | null>(null);
-  const [loading, setLoading] = useState(false);
-
-  useEffect(() => {
-    get<{ name: string }[]>("/factors")
-      .then((factors) => setFactorList(factors.map(f => ({ value: f.name, label: f.name }))))
-      .catch(() => setFactorList([]));
-  }, []);
-
-  const fetchValues = () => {
-    if (selectedFactors.length === 0) return;
-    setLoading(true);
-    fetchFactorValues({
-      factors: selectedFactors.join(","),
-      symbols: symbols || undefined,
-      start: startDate || undefined,
-      end: endDate || undefined,
-    })
-      .then(setData)
-      .catch(() => setData(null))
-      .finally(() => setLoading(false));
-  };
-
-  const columns = data?.factors ? ["symbol", "date", ...data.factors] : [];
+function InspectTab() {
+  const [activeTab, setActiveTab] = useState("quotes");
 
   return (
     <div className="space-y-4">
-      <div className="flex gap-3 items-end">
-        <div className="w-64">
-          <p className="text-xs text-terminal-text-dim uppercase mb-1 font-mono tracking-wider">Factors</p>
-          <MultiSelect options={factorList} values={selectedFactors} onChange={setSelectedFactors} placeholder="Select factors..." />
-        </div>
-        <div className="w-48">
-          <p className="text-xs text-terminal-text-dim uppercase mb-1 font-mono tracking-wider">Symbols</p>
-          <SearchInput value={symbols} onChange={setSymbols} placeholder="SH600519,SZ000001" />
-        </div>
-        <DatePicker value={startDate} onChange={setStartDate} />
-        <DatePicker value={endDate} onChange={setEndDate} />
-        <button
-          onClick={fetchValues}
-          disabled={selectedFactors.length === 0}
-          className="px-3 py-1.5 text-xs font-mono border border-terminal-green text-terminal-green hover:bg-terminal-green-glow transition-colors rounded-sm disabled:opacity-30"
-        >
-          Query
-        </button>
-      </div>
-
-      {loading && <SkeletonTable rows={6} />}
-      {data && data.data.length > 0 && (
-        <Card>
-          <p className="text-xs text-terminal-text-dim mb-2 font-mono">{data.data.length} rows</p>
-          <div className="overflow-x-auto max-h-96 overflow-y-auto">
-            <table className="w-full text-sm">
-              <thead>
-                <tr className="border-b border-terminal-border sticky top-0 bg-terminal-surface">
-                  {columns.map((col) => (
-                    <th key={col} className="px-3 py-2 text-left text-xs text-terminal-text-dim uppercase font-mono tracking-wider">{col}</th>
-                  ))}
-                </tr>
-              </thead>
-              <tbody>
-                {data.data.slice(0, 200).map((row, i) => (
-                  <tr key={i} className="border-b border-terminal-border-dim hover:bg-terminal-raised transition-colors">
-                    {columns.map((col) => (
-                      <td key={col} className="px-3 py-1 text-terminal-text text-xs font-mono">
-                        {typeof row[col] === "number" ? (row[col] as number).toFixed(4) : String(row[col] ?? "-")}
-                      </td>
-                    ))}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      )}
+      <Tabs tabs={INSPECT_TABS} activeKey={activeTab} onChange={setActiveTab} />
+      {activeTab === "quotes" && <StockQuotesTab />}
+      {activeTab === "sectors" && <SectorsTab />}
+      {activeTab === "altData" && <AltDataTab />}
     </div>
-  );
-}
-
-interface CacheEntry {
-  type: string;
-  file_count: number;
-  total_size_mb: number;
-  latest: string | null;
-  ttl_days: number;
-}
-
-function CacheTab() {
-  const { t } = useTranslation();
-  const [cache, setCache] = useState<CacheEntry[]>([]);
-  const [loading, setLoading] = useState(true);
-
-  const refresh = () => {
-    setLoading(true);
-    get<CacheEntry[]>("/data/cache-status")
-      .then(setCache)
-      .catch(() => setCache([]))
-      .finally(() => setLoading(false));
-  };
-
-  useEffect(refresh, []);
-
-  const deleteExpired = (type: string) => {
-    del<{ deleted: number }>(`/data/cache/${type}/expired`)
-      .then(() => refresh())
-      .catch(() => {});
-  };
-
-  if (loading) return <SkeletonTable rows={5} />;
-
-  return (
-    <Table
-      columns={[
-        { key: "type", label: "Type", sortable: true },
-        { key: "file_count", label: "Files", align: "right", sortable: true },
-        { key: "total_size_mb", label: "Size (MB)", align: "right", sortable: true },
-        { key: "latest", label: "Latest", render: (row) => (row.latest ? new Date(row.latest as string).toLocaleDateString() : "-") },
-        { key: "ttl_days", label: "TTL (days)", align: "right" },
-        { key: "actions", label: "", render: (row) => (
-          <button onClick={() => deleteExpired(row.type as string)} className="px-3 py-1.5 text-xs font-mono border border-terminal-red text-terminal-red hover:bg-terminal-red-glow transition-colors rounded-sm">
-            {t("common.deleteExpired")}
-          </button>
-        )},
-      ]}
-      data={cache as unknown as Record<string, unknown>[]}
-      pageSize={20}
-    />
   );
 }
 
 export function DataExplorerPage() {
-  const { t } = useTranslation();
-  const [activeTab, setActiveTab] = useState("quotes");
-
   return (
-    <div className="space-y-5">
-      <div className="flex items-center justify-between">
-        <h1 className="text-sm font-mono font-semibold text-terminal-text-bright uppercase tracking-wider">{t("dataExplorer.title")}</h1>
-        <Tabs tabs={DATA_TABS} activeKey={activeTab} onChange={setActiveTab} />
-      </div>
-
-      {activeTab === "quotes" && <StockQuotesTab />}
-      {activeTab === "sectors" && <SectorsTab />}
-      {activeTab === "altData" && <AltDataTab />}
-      {activeTab === "factors" && <FactorValuesTab />}
-      {activeTab === "cache" && <CacheTab />}
-    </div>
+    <ConsolePageLayout
+      pageKey="data"
+      titleKey="console.data.title"
+      taskTypeFilter={TASK_TYPE_FILTER}
+      initialTab="execute"
+      tabs={{
+        overview: <OverviewTab />,
+        execute: <ExecuteTab />,
+        history: <HistoryTab />,
+        inspect: <InspectTab />,
+      }}
+    />
   );
 }
