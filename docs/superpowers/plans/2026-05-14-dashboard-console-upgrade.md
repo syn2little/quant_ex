@@ -724,7 +724,7 @@ git commit -m "feat(web/api): signals + factors unified envelope"
 
 **Files:** Inspect `run_update_qlib_data.py`;若可包装则 modify `web/api/routers/data.py`。
 
-- [ ] **Step 1: 检查 `run_update_qlib_data.py`**
+- [x] **Step 1: 检查 `run_update_qlib_data.py`**
 
 ```bash
 ./.venv/bin/python run_update_qlib_data.py --help
@@ -732,11 +732,11 @@ git commit -m "feat(web/api): signals + factors unified envelope"
 
 Expected: 输出 CLI 选项。若 `--dry-run` 标志存在且参数化清晰 → 可包装。
 
-- [ ] **Step 2: 决策**
+- [x] **Step 2: 决策**
 
 如可包装,继续 Step 3;否则跳到 Step 5,在 plan 中标注 skip 并通知 subagent A。
 
-- [ ] **Step 3: 在 `data.py` 加端点**
+- [x] **Step 3: 在 `data.py` 加端点** (skipped: CLI has no `--dry-run`)
 
 ```python
 @router.post("/update-qlib")
@@ -769,7 +769,7 @@ async def update_qlib(req: UpdateQlibRequest):
 
 `_do_update_qlib(region, date_range)` 调用 `run_update_qlib_data.main(...)`。
 
-- [ ] **Step 4: 加测试**
+- [x] **Step 4: 加测试** (skipped: endpoint not implemented)
 
 ```python
 def test_data_update_qlib_returns_unified_envelope_for_dry_run():
@@ -785,11 +785,11 @@ def test_data_update_qlib_returns_unified_envelope_for_dry_run():
 
 跑测试,PASS 后 commit。
 
-- [ ] **Step 5: (若 skip) 记录决策**
+- [x] **Step 5: (若 skip) 记录决策**
 
 如果 Step 2 判定不可包装,在 plan 末尾"Phase 0 决策记录"段标注:`update-qlib 不实现,Subagent A 在 §4.1 中跳过该卡片`。Subagent A 派发 prompt 时主 agent 必须复述这条决策。
 
-- [ ] **Step 6: Commit(若实现)**
+- [x] **Step 6: Commit(若实现)** (skipped: no implementation)
 
 ```bash
 git add web/api/routers/data.py test/test_web_console_contract.py
@@ -2690,7 +2690,7 @@ Expected: push 成功。
 
 > 主 agent 完成 Phase 0 后必须填写下列字段,Phase 1 派发时直接使用。
 
-- update-qlib 包装可行性:[YES / NO + 原因]
+- update-qlib 包装可行性:[NO - `run_update_qlib_data.py --help` 未提供 `--dry-run`;实际执行涉及 Dolt/qlib 数据更新、网络/磁盘副作用,本轮不包装,Subagent A 跳过 qlib 增量更新卡片]
 - TaskState 新增字段实际命名:[`page_key`, `action_key`, `result_paths`(默认值已确认)]
 - Phase 0 commit 数:[N]
 - Phase 0 测试用例数:[N]
