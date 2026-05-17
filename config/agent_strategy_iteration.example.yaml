@@ -7,6 +7,30 @@ root: "."
 output_dir: "docs/strategy_log/agent_runs"
 memory_log_path: "docs/strategy_log/agent_memory.md"
 
+discussion:
+  # sequential keeps the legacy fixed role order.
+  # meeting lets a virtual chair decide which role should speak next.
+  mode: "sequential"
+  min_turns: 4
+  max_rounds: 8
+  max_roles_per_round: 1
+  allow_repeat_roles: false
+
+agent_execution:
+  # Reserved local coding-agent execution layer.
+  # CLI/Web can generate Codex task proposals; execution still requires approval.
+  enabled: false
+  provider: "codex"
+  mode: "readonly"      # readonly, patch, danger-full-access
+  max_tasks: 2
+  worktree_dir: ".agent_worktrees"
+  allowed_paths:
+    - "agent/"
+    - "web/"
+    - "test/"
+    - "config/"
+    - "docs/"
+
 llm:
   api_key: ""
   base_url: "https://your-openai-compatible-endpoint.example"

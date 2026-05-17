@@ -4,7 +4,8 @@ import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
-from quant_ex.agent.strategy_iteration.schemas import CommandExecutionPlan, CommandProposal
+from quant_ex.agent.strategy_iteration.execution import SAFE_LOCAL_TAG, save_command_plan
+from quant_ex.agent.strategy_iteration.schemas import CommandExecutionPlan, CommandExecutionResult, CommandProposal
 from web.api.app import create_app
 from web.api.routers import agents as agents_router
 from web.api.routers import backtest as backtest_router
@@ -236,7 +237,26 @@ def test_agent_runs_list_and_detail_are_read_only(monkeypatch, tmp_path):
     assert detail_response.json()["status"] == "planned"
     assert detail_response.json()["artifacts"]["plan.md"] == "# plan\n"
     assert detail_response.json()["artifacts"]["commands.json"]["run_id"] == "demo_run"
-    assert traversal_response.status_code in {400, 404}
+    assert traversal_response.status_code in {400, 404, 405}
+
+
+def test_agent_run_delete_removes_saved_run(monkeypatch, tmp_path):
+    runs_dir = tmp_path / "agent_runs"
+    run_dir = runs_dir / "delete_me"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.json").write_text(json.dumps({"run_id": "delete_me"}), encoding="utf-8")
+    monkeypatch.setattr(agent_service, "AGENT_RUNS_DIR", runs_dir)
+
+    client = TestClient(create_app())
+    response = client.delete("/api/agents/runs/delete_me")
+    missing_response = client.get("/api/agents/runs/delete_me")
+    traversal_response = client.delete("/api/agents/runs/../secret")
+
+    assert response.status_code == 200
+    assert response.json() == {"run_id": "delete_me", "deleted": True}
+    assert not run_dir.exists()
+    assert missing_response.status_code == 404
+    assert traversal_response.status_code in {400, 404, 405}
 
 
 def test_agent_runs_status_is_derived_from_artifacts(monkeypatch, tmp_path):
@@ -296,7 +316,16 @@ def test_agent_create_run_writes_plan_and_command_artifacts(monkeypatch, tmp_pat
     client = TestClient(create_app())
     response = client.post(
         "/api/agents/runs",
-        json={"objective": "phase5 dashboard smoke", "run_id": "phase5_api_smoke"},
+        json={
+            "objective": "phase5 dashboard smoke",
+            "run_id": "phase5_api_smoke",
+            "discussion_mode": "meeting",
+            "meeting_max_rounds": 3,
+            "meeting_max_roles_per_round": 2,
+            "use_agent": True,
+            "agent_mode": "readonly",
+            "agent_max_tasks": 1,
+        },
     )
 
     assert response.status_code == 200
@@ -307,6 +336,16 @@ def test_agent_create_run_writes_plan_and_command_artifacts(monkeypatch, tmp_pat
     assert payload["has_approval_template"] is True
     assert (runs_dir / "phase5_api_smoke" / "run.json").exists()
     assert (runs_dir / "phase5_api_smoke" / "commands.json").exists()
+    assert (runs_dir / "phase5_api_smoke" / "agent_tasks.json").exists()
+    assert (runs_dir / "phase5_api_smoke" / "agent_approval_template.yaml").exists()
+    detail = client.get("/api/agents/runs/phase5_api_smoke").json()
+    assert detail["discussion_mode"] == "meeting"
+    assert detail["discussion_settings"]["max_rounds"] == 3
+    assert detail["discussion_settings"]["max_roles_per_round"] == 2
+    assert detail["artifacts"]["run.json"]["discussion_mode"] == "meeting"
+    assert "agent_tasks.json" in detail["artifacts"]
+    assert "agent_approval_template.yaml" in detail["artifacts"]
+    assert "discussion_trace.md" in detail["artifacts"]
 
 
 def test_agent_create_with_llm_returns_background_task(monkeypatch):
@@ -334,6 +373,10 @@ def test_agent_create_with_llm_returns_background_task(monkeypatch):
     assert payload["task_id"]
     assert payload["run_id"] == "async_agent_run"
     assert task_calls[-1]["task_type"] == "agent_create"
+    assert task_calls[-1]["kwargs"]["discussion_mode"] == "sequential"
+    assert task_calls[-1]["kwargs"]["meeting_max_rounds"] is None
+    assert task_calls[-1]["kwargs"]["meeting_max_roles_per_round"] is None
+    assert task_calls[-1]["kwargs"]["use_agent"] is False
     assert task_calls[-1]["kwargs"]["page_key"] == "agents"
     assert task_calls[-1]["kwargs"]["action_key"] == "agents.create"
 
@@ -403,6 +446,7 @@ def test_agent_approval_update_and_execute_safe_task(monkeypatch, tmp_path):
     assert task_calls[-1]["task_type"] == "agent_execute_safe"
     assert task_calls[-1]["args"] == ("approval_update",)
     assert task_calls[-1]["kwargs"]["command_ids"] == ["cmd_007"]
+    assert task_calls[-1]["kwargs"]["skip_successful"] is True
     assert task_calls[-1]["kwargs"]["page_key"] == "agents"
     assert task_calls[-1]["kwargs"]["action_key"] == "agents.execute_safe"
 
@@ -415,6 +459,7 @@ def test_agent_approval_update_and_execute_safe_task(monkeypatch, tmp_path):
     assert task_calls[-1]["task_type"] == "agent_execute_approved"
     assert task_calls[-1]["kwargs"]["include_safe"] is True
     assert task_calls[-1]["kwargs"]["command_ids"] == ["cmd_007"]
+    assert task_calls[-1]["kwargs"]["skip_successful"] is True
     assert task_calls[-1]["kwargs"]["page_key"] == "agents"
     assert task_calls[-1]["kwargs"]["action_key"] == "agents.execute_approved"
 
@@ -429,6 +474,44 @@ def test_agent_approval_update_and_execute_safe_task(monkeypatch, tmp_path):
     assert task_calls[-1]["kwargs"]["rank_metric"] == "information_ratio"
     assert task_calls[-1]["kwargs"]["page_key"] == "agents"
     assert task_calls[-1]["kwargs"]["action_key"] == "agents.feedback"
+
+
+def test_agent_execute_safe_skips_successful_commands_by_default(monkeypatch, tmp_path):
+    runs_dir = tmp_path / "agent_runs"
+    run_dir = runs_dir / "skip_success"
+    monkeypatch.setattr(agent_service, "AGENT_RUNS_DIR", runs_dir)
+    monkeypatch.setattr(agent_service, "PROJECT_ROOT", tmp_path)
+
+    proposal = CommandProposal(
+        command_id="cmd_done",
+        command="./.venv/bin/python -c \"raise SystemExit(7)\"",
+        purpose="should not rerun by default",
+        source="unit",
+        risk_tags=[SAFE_LOCAL_TAG],
+        requires_approval=False,
+    )
+    command_plan = CommandExecutionPlan(
+        run_id="skip_success",
+        generated_at="2026-05-15T00:00:00",
+        policy="unit",
+        commands=[proposal],
+        results=[
+            CommandExecutionResult(
+                command_id="cmd_done",
+                command=proposal.command,
+                skipped=False,
+                returncode=0,
+            )
+        ],
+    )
+    save_command_plan(command_plan, run_dir)
+
+    result = agent_service.execute_agent_run_safe("skip_success", command_ids=["cmd_done"])
+    saved = json.loads((run_dir / "commands.json").read_text(encoding="utf-8"))
+
+    assert result["status"] == "completed"
+    assert saved["results"][0]["command_id"] == "cmd_done"
+    assert saved["results"][0]["returncode"] == 0
 
 
 def test_agent_command_selection_distinguishes_empty_from_all():

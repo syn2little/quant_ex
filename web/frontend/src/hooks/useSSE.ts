@@ -9,6 +9,7 @@ export function useSSE(taskId: string | null) {
   const [events, setEvents] = useState<SSEEvent[]>([]);
   const [status, setStatus] = useState<"idle" | "streaming" | "done" | "error">("idle");
   const [error, setError] = useState<string | null>(null);
+  const [activeTaskId, setActiveTaskId] = useState<string | null>(null);
   const abortRef = useRef<AbortController | null>(null);
 
   const stop = useCallback(() => {
@@ -17,8 +18,15 @@ export function useSSE(taskId: string | null) {
   }, []);
 
   useEffect(() => {
-    if (!taskId) return;
+    if (!taskId) {
+      setActiveTaskId(null);
+      setEvents([]);
+      setStatus("idle");
+      setError(null);
+      return;
+    }
 
+    setActiveTaskId(taskId);
     setEvents([]);
     setStatus("streaming");
     setError(null);
@@ -75,5 +83,11 @@ export function useSSE(taskId: string | null) {
     return () => controller.abort();
   }, [taskId]);
 
-  return { events, status, error, stop };
+  const isCurrentTask = activeTaskId === taskId;
+  return {
+    events: isCurrentTask ? events : [],
+    status: taskId ? (isCurrentTask ? status : "streaming") : "idle",
+    error: isCurrentTask ? error : null,
+    stop,
+  };
 }

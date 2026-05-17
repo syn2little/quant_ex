@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional
 
@@ -60,6 +61,8 @@ class OpenAICompatibleChatClient:
     reasoning_effort: Optional[str] = None
     stream: bool = False
     chat_path: str = "/v1/chat/completions"
+    retry_attempts: int = 2
+    retry_backoff_seconds: float = 1.5
 
     @classmethod
     def from_env(
@@ -99,6 +102,10 @@ class OpenAICompatibleChatClient:
             reasoning_effort=tier_config.get("reasoning_effort") or llm_config.get("reasoning_effort"),
             stream=bool(tier_config.get("stream", llm_config.get("stream", False))),
             chat_path=str(tier_config.get("chat_path") or llm_config.get("chat_path") or "/v1/chat/completions"),
+            retry_attempts=int(tier_config.get("retry_attempts") or llm_config.get("retry_attempts") or 2),
+            retry_backoff_seconds=float(
+                tier_config.get("retry_backoff_seconds") or llm_config.get("retry_backoff_seconds") or 1.5
+            ),
         )
 
     @property
@@ -128,15 +135,27 @@ class OpenAICompatibleChatClient:
         if self.stream:
             payload["stream"] = True
 
-        response = requests.post(
-            url,
-            headers={
-                "Authorization": f"Bearer {self.api_key}",
-                "Content-Type": "application/json",
-            },
-            json=payload,
-            timeout=self.timeout,
-        )
+        last_error: Exception | None = None
+        attempts = max(1, int(self.retry_attempts or 1))
+        for attempt in range(1, attempts + 1):
+            try:
+                response = requests.post(
+                    url,
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    json=payload,
+                    timeout=self.timeout,
+                )
+                break
+            except requests.exceptions.RequestException as exc:
+                last_error = exc
+                if attempt >= attempts:
+                    raise
+                time.sleep(max(0.0, self.retry_backoff_seconds) * attempt)
+        else:  # pragma: no cover - loop always breaks or raises
+            raise last_error or RuntimeError("LLM request failed before receiving a response")
         response.raise_for_status()
         response.encoding = "utf-8"
         if self.stream:

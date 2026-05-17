@@ -180,8 +180,16 @@ export interface AgentRunDetail extends AgentRunSummary {
 export interface AgentRunCreateRequest {
   objective: string;
   run_id?: string;
+  discussion_mode?: "sequential" | "meeting";
+  meeting_max_rounds?: number;
+  meeting_max_roles_per_round?: number;
   use_llm: boolean;
   propose_actions: boolean;
   write_approval_template: boolean;
+  use_agent?: boolean;
+  agent_provider?: string;
+  agent_mode?: "readonly" | "patch" | "danger-full-access";
+  agent_max_tasks?: number;
+  write_agent_approval_template?: boolean;
   append_memory: boolean;
 }

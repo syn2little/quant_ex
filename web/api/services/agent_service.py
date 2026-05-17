@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import shutil
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -12,10 +13,13 @@ from fastapi import HTTPException
 from quant_ex.agent.strategy_iteration import (
     StrategyIterationOrchestrator,
     attach_feedback_candidates,
+    build_agent_task_plan,
     build_command_plan,
     execute_approved_commands,
     execute_safe_commands,
     generate_feedback,
+    save_agent_approval_template,
+    save_agent_task_plan,
     save_approval_template,
     save_command_plan,
 )
@@ -34,10 +38,13 @@ TEXT_ARTIFACTS = (
     "plan.md",
     "commands.md",
     "execution_summary.md",
+    "agent_tasks.md",
+    "discussion_trace.md",
     "feedback.md",
+    "agent_approval_template.yaml",
     "approval_template.yaml",
 )
-JSON_ARTIFACTS = ("run.json", "commands.json", "feedback.json")
+JSON_ARTIFACTS = ("run.json", "commands.json", "agent_tasks.json", "discussion_trace.json", "feedback.json")
 
 
 def list_agent_runs() -> list[dict[str, Any]]:
@@ -67,14 +74,31 @@ def get_agent_run(run_id: str) -> dict[str, Any]:
     return payload
 
 
+def delete_agent_run(run_id: str) -> dict[str, Any]:
+    """Delete one saved agent run directory after path validation."""
+
+    run_dir = _safe_run_dir(run_id)
+    shutil.rmtree(run_dir)
+    return {"run_id": run_id, "deleted": True}
+
+
 def create_agent_run(
     *,
     objective: str,
     run_id: str | None = None,
+    discussion_mode: str = "sequential",
+    meeting_max_rounds: int | None = None,
+    meeting_max_roles_per_round: int | None = None,
     use_llm: bool = False,
     propose_actions: bool = True,
     write_approval_template: bool = True,
+    use_agent: bool = False,
+    agent_provider: str = "codex",
+    agent_mode: str = "readonly",
+    agent_max_tasks: int = 2,
+    write_agent_approval_template: bool = True,
     append_memory: bool = False,
+    progress_callback=None,
 ) -> dict[str, Any]:
     if not objective.strip():
         raise HTTPException(status_code=400, detail="objective is required")
@@ -83,23 +107,85 @@ def create_agent_run(
         if (AGENT_RUNS_DIR / run_id).exists():
             raise HTTPException(status_code=409, detail="Agent run already exists")
 
+    _emit_progress(progress_callback, "create_start", message="Loading agent iteration configuration.")
     orchestrator = StrategyIterationOrchestrator.from_config(PROJECT_ROOT / "config" / "agent_strategy_iteration.yaml")
     orchestrator.root = PROJECT_ROOT
     orchestrator.output_dir = AGENT_RUNS_DIR
     if not orchestrator.memory_log_path.is_absolute():
         orchestrator.memory_log_path = PROJECT_ROOT / orchestrator.memory_log_path
-    run = orchestrator.build_run(objective.strip(), use_llm=use_llm, run_id=run_id)
+    _emit_progress(
+        progress_callback,
+        "plan_start",
+        message="Building project context and running agent discussion.",
+        discussion_mode=discussion_mode,
+        use_llm=use_llm,
+    )
+    run = orchestrator.build_run(
+        objective.strip(),
+        use_llm=use_llm,
+        run_id=run_id,
+        discussion_mode=discussion_mode,
+        meeting_max_rounds=meeting_max_rounds,
+        meeting_max_roles_per_round=meeting_max_roles_per_round,
+        progress_callback=progress_callback,
+    )
+    _emit_progress(
+        progress_callback,
+        "plan_done",
+        message="Agent discussion completed; saving run artifacts.",
+        run_id=run.run_id,
+        role_count=len(run.plan.role_reports),
+        arm_count=len(run.plan.experiment_arms),
+    )
     run_dir = orchestrator.save_run(run, append_memory=append_memory)
+    _emit_progress(progress_callback, "artifacts_done", message="Saved agent run artifacts.", run_id=run.run_id)
 
     if propose_actions:
+        _emit_progress(progress_callback, "commands_start", message="Generating command proposals.", run_id=run.run_id)
         command_plan = build_command_plan(run.plan)
         command_plan = attach_feedback_candidates(command_plan, root=orchestrator.root)
         save_command_plan(command_plan, run_dir)
         if write_approval_template:
             save_approval_template(command_plan, run_dir)
+        _emit_progress(
+            progress_callback,
+            "commands_done",
+            message="Command proposals are ready.",
+            run_id=run.run_id,
+            command_count=len(command_plan.commands),
+        )
+
+    if use_agent:
+        _emit_progress(progress_callback, "agent_tasks_start", message="Generating Codex task proposals.", run_id=run.run_id)
+        agent_plan = build_agent_task_plan(
+            run.plan,
+            provider=agent_provider,
+            mode=agent_mode,
+            max_tasks=agent_max_tasks,
+        )
+        save_agent_task_plan(agent_plan, run_dir)
+        if write_agent_approval_template:
+            save_agent_approval_template(agent_plan, run_dir)
+        _emit_progress(
+            progress_callback,
+            "agent_tasks_done",
+            message="Codex task proposals are ready.",
+            run_id=run.run_id,
+            task_count=len(agent_plan.tasks),
+        )
 
     summary = _summarize_run(run_dir)
+    _emit_progress(progress_callback, "create_done", message="Agent run creation completed.", run_id=run.run_id)
     return {"run_id": run.run_id, "status": summary["status"], **_artifact_flags(summary)}
+
+
+def _emit_progress(progress_callback, stage: str, **payload) -> None:
+    if not progress_callback:
+        return
+    try:
+        progress_callback("progress", stage=stage, **payload)
+    except Exception:
+        pass
 
 
 def regenerate_approval_template(run_id: str) -> dict[str, Any]:
@@ -157,11 +243,19 @@ def update_command_approval(
     return {"run_id": summary["run_id"], "status": summary["status"], "approval_entries": _read_approval_entries(run_dir)}
 
 
-def execute_agent_run_safe(run_id: str, *, command_ids: list[str] | None = None) -> dict[str, Any]:
+def execute_agent_run_safe(
+    run_id: str,
+    *,
+    command_ids: list[str] | None = None,
+    skip_successful: bool = True,
+    progress_callback=None,
+) -> dict[str, Any]:
     run_dir = _safe_run_dir(run_id)
     command_plan = _load_command_plan(run_dir)
     selected_plan = _select_commands(command_plan, command_ids)
-    selected_plan = execute_safe_commands(selected_plan, root=PROJECT_ROOT)
+    if skip_successful:
+        selected_plan = _skip_successful_commands(selected_plan, command_plan.results)
+    selected_plan = execute_safe_commands(selected_plan, root=PROJECT_ROOT, progress_callback=progress_callback)
     command_plan.results = _merge_results(command_plan.results, selected_plan.results)
     command_plan = attach_feedback_candidates(command_plan, root=PROJECT_ROOT)
     save_command_plan(command_plan, run_dir)
@@ -174,6 +268,8 @@ def execute_agent_run_approved(
     *,
     include_safe: bool = False,
     command_ids: list[str] | None = None,
+    skip_successful: bool = True,
+    progress_callback=None,
 ) -> dict[str, Any]:
     run_dir = _safe_run_dir(run_id)
     approval_file = run_dir / "approval_template.yaml"
@@ -181,11 +277,14 @@ def execute_agent_run_approved(
         raise HTTPException(status_code=404, detail="Approval template not found")
     command_plan = _load_command_plan(run_dir)
     selected_plan = _select_commands(command_plan, command_ids)
+    if skip_successful:
+        selected_plan = _skip_successful_commands(selected_plan, command_plan.results)
     selected_plan = execute_approved_commands(
         selected_plan,
         approval_file=approval_file,
         root=PROJECT_ROOT,
         include_safe=include_safe,
+        progress_callback=progress_callback,
     )
     command_plan.results = _merge_results(command_plan.results, selected_plan.results)
     command_plan = attach_feedback_candidates(command_plan, root=PROJECT_ROOT)
@@ -258,6 +357,8 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
     return {
         "run_id": run_dir.name,
         "objective": run_payload.get("objective"),
+        "discussion_mode": run_payload.get("discussion_mode"),
+        "discussion_settings": run_payload.get("discussion_settings") or {},
         "status": _derive_run_status(run_payload, commands_payload, feedback_payload, run_dir),
         "feedback_decision": (feedback_payload or {}).get("decision"),
         "generated_at": run_payload.get("generated_at"),
@@ -354,6 +455,29 @@ def _select_commands(command_plan: CommandExecutionPlan, command_ids: list[str] 
         commands=[item for item in command_plan.commands if item.command_id in requested],
         results=[item for item in command_plan.results if item.command_id in requested],
         feedback_candidates=[item for item in command_plan.feedback_candidates if item.command_id in requested],
+    )
+
+
+def _skip_successful_commands(
+    command_plan: CommandExecutionPlan,
+    previous_results: list[CommandExecutionResult],
+) -> CommandExecutionPlan:
+    successful = {
+        item.command_id
+        for item in previous_results
+        if not item.skipped and item.returncode == 0
+    }
+    if not successful:
+        return command_plan
+    return CommandExecutionPlan(
+        run_id=command_plan.run_id,
+        generated_at=command_plan.generated_at,
+        policy=command_plan.policy,
+        commands=[item for item in command_plan.commands if item.command_id not in successful],
+        results=[item for item in command_plan.results if item.command_id not in successful],
+        feedback_candidates=[
+            item for item in command_plan.feedback_candidates if item.command_id not in successful
+        ],
     )
 
 

@@ -6,6 +6,7 @@ from pydantic import BaseModel
 
 from web.api.services.agent_service import (
     create_agent_run,
+    delete_agent_run,
     execute_agent_run_approved,
     execute_agent_run_safe,
     generate_agent_run_feedback,
@@ -22,9 +23,17 @@ router = APIRouter()
 class CreateAgentRunRequest(BaseModel):
     objective: str
     run_id: str | None = None
+    discussion_mode: str = "sequential"
+    meeting_max_rounds: int | None = None
+    meeting_max_roles_per_round: int | None = None
     use_llm: bool = False
     propose_actions: bool = True
     write_approval_template: bool = True
+    use_agent: bool = False
+    agent_provider: str = "codex"
+    agent_mode: str = "readonly"
+    agent_max_tasks: int = 2
+    write_agent_approval_template: bool = True
     append_memory: bool = False
 
 
@@ -36,11 +45,13 @@ class ApprovalUpdateRequest(BaseModel):
 
 class ExecuteCommandsRequest(BaseModel):
     command_ids: list[str] | None = None
+    skip_successful: bool = True
 
 
 class ExecuteApprovedRequest(BaseModel):
     include_safe: bool = False
     command_ids: list[str] | None = None
+    skip_successful: bool = True
 
 
 class GenerateFeedbackRequest(BaseModel):
@@ -58,14 +69,27 @@ def run_detail(run_id: str) -> dict:
     return get_agent_run(run_id)
 
 
+@router.delete("/runs/{run_id}")
+def delete_run(run_id: str) -> dict:
+    return delete_agent_run(run_id)
+
+
 @router.post("/runs")
 async def create_run(request: CreateAgentRunRequest) -> dict:
     kwargs = {
         "objective": request.objective,
         "run_id": request.run_id,
+        "discussion_mode": request.discussion_mode,
+        "meeting_max_rounds": request.meeting_max_rounds,
+        "meeting_max_roles_per_round": request.meeting_max_roles_per_round,
         "use_llm": request.use_llm,
         "propose_actions": request.propose_actions,
         "write_approval_template": request.write_approval_template,
+        "use_agent": request.use_agent,
+        "agent_provider": request.agent_provider,
+        "agent_mode": request.agent_mode,
+        "agent_max_tasks": request.agent_max_tasks,
+        "write_agent_approval_template": request.write_agent_approval_template,
         "append_memory": request.append_memory,
     }
     if request.use_llm:
@@ -74,6 +98,7 @@ async def create_run(request: CreateAgentRunRequest) -> dict:
             create_agent_run,
             page_key="agents",
             action_key="agents.create",
+            progress_callback_arg="progress_callback",
             **kwargs,
         )
         return {"task_id": task_id, "run_id": request.run_id}
@@ -104,7 +129,9 @@ async def execute_safe(run_id: str, request: ExecuteCommandsRequest | None = Non
         run_id,
         page_key="agents",
         action_key="agents.execute_safe",
+        progress_callback_arg="progress_callback",
         command_ids=(request.command_ids if request else None),
+        skip_successful=(request.skip_successful if request else True),
     )
     return {"task_id": task_id, "run_id": run_id}
 
@@ -117,8 +144,10 @@ async def execute_approved(run_id: str, request: ExecuteApprovedRequest) -> dict
         run_id,
         page_key="agents",
         action_key="agents.execute_approved",
+        progress_callback_arg="progress_callback",
         include_safe=request.include_safe,
         command_ids=request.command_ids,
+        skip_successful=request.skip_successful,
     )
     return {"task_id": task_id, "run_id": run_id}
 

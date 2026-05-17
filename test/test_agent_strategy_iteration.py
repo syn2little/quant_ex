@@ -1,6 +1,16 @@
 import json
 from pathlib import Path
 
+import requests
+import yaml
+
+from agent.strategy_iteration.agent_execution import (
+    AGENT_MODE_DANGER_FULL_ACCESS,
+    build_agent_task_plan,
+    execute_approved_agent_tasks,
+    save_agent_approval_template,
+    save_agent_task_plan,
+)
 from agent.strategy_iteration.context import build_project_context
 from agent.strategy_iteration.evaluator import generate_feedback, parse_metric_snapshot
 from agent.strategy_iteration.llm import OpenAICompatibleChatClient, _repair_mojibake
@@ -58,7 +68,11 @@ def test_orchestrator_saves_run_bundle(tmp_path: Path):
     assert (run_dir / "prompts.json").exists()
     assert (run_dir / "role_traces.json").exists()
     assert (run_dir / "role_traces.md").exists()
+    assert (run_dir / "discussion_trace.json").exists()
+    assert (run_dir / "discussion_trace.md").exists()
     assert (tmp_path / "agent_memory.md").exists()
+    assert run.discussion_mode == "sequential"
+    assert run.discussion_trace == []
     assert run.plan.role_reports[-1].upstream_roles
     assert all(report.required_outputs for report in run.plan.role_reports)
     assert run.role_traces
@@ -128,6 +142,108 @@ def test_role_runner_attaches_schema_and_carryover():
     assert all(isinstance(report.schema_warnings, list) for report in reports)
 
 
+def test_meeting_mode_runs_adaptive_offline_agenda():
+    context = build_project_context("meeting mode offline check")
+    runner = RoleRunner()
+
+    reports = runner.run_meeting(context, use_llm=False, min_turns=4, max_turns=6)
+
+    assert [report.role for report in reports] == [
+        "data_factor_analyst",
+        "backtest_analyst",
+        "bear_researcher",
+        "experiment_designer",
+        "research_portfolio_manager",
+    ]
+    assert runner.chair_decisions[-1].action == "final"
+    assert runner.discussion_trace
+    assert runner.traces[0]["chair_focus"]
+
+
+def test_meeting_mode_respects_roles_per_round_limit():
+    context = build_project_context("meeting mode round limit check")
+    runner = RoleRunner()
+
+    reports = runner.run_meeting(context, use_llm=False, min_turns=4, max_turns=3, max_roles_per_turn=2)
+
+    assert len(reports) == 5
+    called_rounds = [item.get("called_roles") or [] for item in runner.discussion_trace if item.get("called_roles")]
+    assert called_rounds[0] == ["data_factor_analyst", "backtest_analyst"]
+    assert all(len(roles) <= 2 for roles in called_rounds)
+
+
+def test_orchestrator_meeting_settings_override_config():
+    orchestrator = StrategyIterationOrchestrator(root=Path("."))
+
+    run = orchestrator.build_run(
+        "meeting settings check",
+        use_llm=False,
+        run_id="meeting_settings",
+        discussion_mode="meeting",
+        meeting_max_rounds=3,
+        meeting_max_roles_per_round=2,
+    )
+
+    assert run.discussion_mode == "meeting"
+    assert run.discussion_settings["max_rounds"] == 3
+    assert run.discussion_settings["max_roles_per_round"] == 2
+    assert len(run.plan.role_reports) == 5
+
+
+def test_meeting_mode_uses_llm_chair_to_select_roles(monkeypatch):
+    class FakeClient:
+        model = "fake-deep"
+        reasoning_effort = "low"
+        temperature = 0.0
+        max_tokens = 1200
+        stream = False
+        is_configured = True
+        chair_calls = 0
+
+        def complete_json(self, *, system, user, max_tokens=None):
+            del user, max_tokens
+            if "virtual meeting chair" in system:
+                FakeClient.chair_calls += 1
+                if FakeClient.chair_calls == 1:
+                    return {
+                        "action": "call_role",
+                        "next_role": "bear_researcher",
+                        "rationale": "Start with adversarial pressure.",
+                        "focus": "Find kill tests first.",
+                        "confidence": 0.8,
+                    }
+                return {
+                    "action": "final",
+                    "decision": "continue",
+                    "final_summary": "Enough for the unit meeting.",
+                    "confidence": 0.7,
+                }
+            return {
+                "role": "bear_researcher",
+                "thesis": "The proposal needs kill tests before execution.",
+                "evidence": ["chair called bear first"],
+                "proposals": ["define kill tests"],
+                "risks": ["overfit"],
+                "verdict": "continue_with_gates",
+                "confidence": 0.8,
+                "next_actions": ["call validation role if needed"],
+                "prompt_name": "bear_researcher",
+            }
+
+    monkeypatch.setattr(
+        "agent.strategy_iteration.roles.OpenAICompatibleChatClient.from_env",
+        lambda **kwargs: FakeClient(),
+    )
+    context = build_project_context("meeting mode llm chair check")
+    runner = RoleRunner()
+
+    reports = runner.run_meeting(context, use_llm=True, min_turns=1, max_turns=3)
+
+    assert reports[0].role == "bear_researcher"
+    assert runner.chair_decisions[0].next_role == "bear_researcher"
+    assert runner.chair_decisions[-1].action == "final"
+
+
 def test_role_report_preserves_dict_proposals_as_readable_json():
     report = RoleReport.from_dict(
         "data_factor_analyst",
@@ -189,6 +305,33 @@ def test_llm_client_uses_tiered_config(monkeypatch):
     assert deep.base_url == "https://config.example.test/openai"
     assert deep.stream is True
     assert deep.is_configured
+
+
+def test_role_runner_falls_back_when_llm_request_fails(monkeypatch):
+    class FailingClient:
+        model = "failing-model"
+        reasoning_effort = "low"
+        temperature = 0.0
+        max_tokens = 1200
+        stream = False
+        is_configured = True
+
+        def complete_json(self, *, system, user, max_tokens=None):
+            del system, user, max_tokens
+            raise requests.exceptions.SSLError("unexpected eof")
+
+    monkeypatch.setattr(
+        "agent.strategy_iteration.roles.OpenAICompatibleChatClient.from_env",
+        lambda **kwargs: FailingClient(),
+    )
+
+    context = build_project_context("llm failure fallback check")
+    runner = RoleRunner(roles=DEFAULT_ROLES[:1])
+    reports = runner.run_all(context, use_llm=True)
+
+    assert len(reports) == 1
+    assert reports[0].role == DEFAULT_ROLES[0].name
+    assert runner.traces[0]["used_llm"] is False
 
 
 def test_llm_client_falls_back_to_env_when_strings_absent(monkeypatch):
@@ -381,6 +524,76 @@ def test_execute_safe_commands_skips_protected_commands():
     assert any(result.command_id == "cmd_wfv" and result.skipped for result in executed.results)
 
 
+def test_execute_safe_commands_streams_command_output():
+    proposal = CommandProposal(
+        command_id="cmd_stream",
+        command="./.venv/bin/python -c \"import sys; print('hello stdout'); print('hello stderr', file=sys.stderr)\"",
+        purpose="stream smoke",
+        source="unit",
+        risk_tags=[SAFE_LOCAL_TAG],
+        requires_approval=False,
+    )
+    command_plan = CommandExecutionPlan(
+        run_id="stream_case",
+        generated_at="2026-05-15T00:00:00",
+        policy="unit",
+        commands=[proposal],
+    )
+    events = []
+
+    def collect(event_type, **payload):
+        events.append((event_type, payload))
+
+    executed = execute_safe_commands(command_plan, root=Path("."), progress_callback=collect)
+
+    assert executed.results[0].returncode == 0
+    output_events = [payload for event_type, payload in events if payload.get("stage") == "command_output"]
+    assert any(payload.get("stream") == "stdout" and "hello stdout" in payload.get("line", "") for payload in output_events)
+    assert any(payload.get("stream") == "stderr" and "hello stderr" in payload.get("line", "") for payload in output_events)
+    assert any(payload.get("stage") == "command_done" and payload.get("stdout_tail") for _, payload in events)
+
+
+def test_execute_approved_commands_skip_unresolved_template_placeholders(tmp_path: Path):
+    proposal = CommandProposal(
+        command_id="cmd_template",
+        command="./.venv/bin/python run_backtest.py --model-path models/<candidate_model>.pkl --output-csv backtest_results/demo.csv",
+        purpose="template backtest",
+        source="unit",
+        risk_tags=[EXPENSIVE_TAG, "template_placeholder"],
+        requires_approval=True,
+        approval_reason="Protected risk tag(s): expensive, template_placeholder.",
+    )
+    command_plan = CommandExecutionPlan(
+        run_id="template_guard",
+        generated_at="2026-05-15T00:00:00",
+        policy="unit",
+        commands=[proposal],
+    )
+    approval_file = tmp_path / "approval.yaml"
+    approval_file.write_text(
+        yaml.safe_dump(
+            {
+                "run_id": command_plan.run_id,
+                "approvals": [
+                    {
+                        "command_id": proposal.command_id,
+                        "command_sha256": proposal.command_sha256,
+                        "approved": True,
+                        "reason": "unit approval should still not execute placeholders",
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    executed = execute_approved_commands(command_plan, approval_file=approval_file, root=Path("."))
+
+    assert executed.results[0].skipped
+    assert "unresolved template placeholder" in executed.results[0].skip_reason
+    assert executed.results[0].returncode is None
+
+
 def test_cli_propose_actions_writes_command_bundle(tmp_path: Path):
     output_dir = tmp_path / "runs"
     exit_code = run_agent_main(
@@ -400,6 +613,85 @@ def test_cli_propose_actions_writes_command_bundle(tmp_path: Path):
     assert (output_dir / "actions_cli" / "commands.json").exists()
     assert (output_dir / "actions_cli" / "commands.md").exists()
     assert (output_dir / "actions_cli" / "execution_summary.md").exists()
+
+
+def test_agent_task_plan_and_danger_warning(tmp_path: Path):
+    orchestrator = StrategyIterationOrchestrator(root=Path("."))
+    run = orchestrator.build_run("agent task planning check", use_llm=False, run_id="agent_task_plan")
+
+    agent_plan = build_agent_task_plan(
+        run.plan,
+        mode=AGENT_MODE_DANGER_FULL_ACCESS,
+        max_tasks=1,
+    )
+    approval_path = save_agent_approval_template(agent_plan, tmp_path)
+    payload = yaml.safe_load(approval_path.read_text(encoding="utf-8"))
+
+    assert len(agent_plan.tasks) == 1
+    assert agent_plan.tasks[0].requires_approval
+    assert agent_plan.tasks[0].mode == "danger-full-access"
+    assert "DANGER" in agent_plan.tasks[0].approval_reason
+    assert payload["approvals"][0]["approved"] is False
+    assert "DANGER" in payload["approvals"][0]["warning"]
+
+
+def test_agent_task_execution_requires_approval(tmp_path: Path):
+    orchestrator = StrategyIterationOrchestrator(root=Path("."))
+    run = orchestrator.build_run("agent task approval check", use_llm=False, run_id="agent_task_approval")
+    agent_plan = build_agent_task_plan(run.plan, mode="readonly", max_tasks=1)
+    approval_file = tmp_path / "approval.yaml"
+    approval_file.write_text(
+        yaml.safe_dump(
+            {
+                "run_id": agent_plan.run_id,
+                "approvals": [
+                    {
+                        "task_id": agent_plan.tasks[0].task_id,
+                        "prompt_sha256": agent_plan.tasks[0].prompt_sha256,
+                        "approved": False,
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    executed = execute_approved_agent_tasks(
+        agent_plan,
+        approval_file=approval_file,
+        root=Path("."),
+        codex_bin="definitely_missing_codex_for_unit_test",
+    )
+
+    assert executed.results[0].skipped
+    assert "approved=false" in executed.results[0].skip_reason
+
+
+def test_cli_use_agent_writes_task_bundle(tmp_path: Path):
+    output_dir = tmp_path / "runs"
+    exit_code = run_agent_main(
+        [
+            "--objective",
+            "cli agent task check",
+            "--run-id",
+            "agent_cli",
+            "--output-dir",
+            str(output_dir),
+            "--no-llm",
+            "--no-memory",
+            "--use-agent",
+            "--agent-mode",
+            "patch",
+            "--agent-max-tasks",
+            "1",
+            "--write-agent-approval-template",
+        ]
+    )
+
+    assert exit_code == 0
+    assert (output_dir / "agent_cli" / "agent_tasks.json").exists()
+    assert (output_dir / "agent_cli" / "agent_tasks.md").exists()
+    assert (output_dir / "agent_cli" / "agent_approval_template.yaml").exists()
 
 
 def test_save_approval_template_includes_command_hashes(tmp_path: Path):

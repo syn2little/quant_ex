@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional
+from typing import Any, Callable, Dict, Iterable, Optional
 
 import yaml
 
@@ -12,6 +12,11 @@ from .memory import StrategyAgentMemoryLog
 from .prompt_loader import load_prompt_catalog
 from .roles import DEFAULT_ROLES, RoleRunner
 from .schemas import AgentRole, ExperimentArm, RoleReport, StrategyIterationPlan, StrategyIterationRun
+
+
+DISCUSSION_SEQUENTIAL = "sequential"
+DISCUSSION_MEETING = "meeting"
+ProgressCallback = Callable[..., None]
 
 
 class StrategyIterationOrchestrator:
@@ -34,6 +39,7 @@ class StrategyIterationOrchestrator:
         self.root = Path(root)
         self.roles = list(roles or DEFAULT_ROLES)
         self.llm_config = llm_config or {}
+        self.discussion_config = {}
         self.output_dir = Path(output_dir)
         if not self.output_dir.is_absolute():
             self.output_dir = self.root / self.output_dir
@@ -60,13 +66,15 @@ class StrategyIterationOrchestrator:
             )
             for item in data.get("roles", [])
         ] or None
-        return cls(
+        orchestrator = cls(
             root=data.get("root", "."),
             roles=roles,
             output_dir=data.get("output_dir", "docs/strategy_log/agent_runs"),
             memory_log_path=data.get("memory_log_path", "docs/strategy_log/agent_memory.md"),
             llm_config=data.get("llm", {}),
         )
+        orchestrator.discussion_config = data.get("discussion", {}) or {}
+        return orchestrator
 
     def build_run(
         self,
@@ -74,10 +82,61 @@ class StrategyIterationOrchestrator:
         *,
         use_llm: bool = False,
         run_id: Optional[str] = None,
+        discussion_mode: Optional[str] = None,
+        meeting_max_rounds: Optional[int] = None,
+        meeting_max_roles_per_round: Optional[int] = None,
+        progress_callback: ProgressCallback | None = None,
     ) -> StrategyIterationRun:
+        self._emit_progress(progress_callback, "context_start", message="Collecting local strategy context.")
         context = build_project_context(objective, root=self.root)
-        runner = RoleRunner(self.roles, llm_config=self.llm_config)
-        reports = runner.run_all(context, use_llm=use_llm)
+        self._emit_progress(
+            progress_callback,
+            "context_done",
+            message="Local strategy context collected.",
+            candidate_count=len((context.candidate_summary or {}).get("items", []) or []),
+        )
+        runner = RoleRunner(self.roles, llm_config=self.llm_config, progress_callback=progress_callback)
+        discussion_mode = self._normalize_discussion_mode(
+            discussion_mode or self.discussion_config.get("mode") or DISCUSSION_SEQUENTIAL
+        )
+        discussion_settings: Dict[str, Any] = {"mode": discussion_mode}
+        if discussion_mode == DISCUSSION_MEETING:
+            max_rounds = (
+                meeting_max_rounds
+                or self.discussion_config.get("max_rounds")
+                or self.discussion_config.get("max_turns")
+                or 8
+            )
+            max_roles_per_round = (
+                meeting_max_roles_per_round
+                or self.discussion_config.get("max_roles_per_round")
+                or self.discussion_config.get("max_roles_per_turn")
+                or 1
+            )
+            discussion_settings.update(
+                {
+                    "max_rounds": int(max_rounds),
+                    "min_turns": int(self.discussion_config.get("min_turns") or 4),
+                    "max_roles_per_round": int(max_roles_per_round),
+                    "allow_repeat_roles": bool(self.discussion_config.get("allow_repeat_roles", False)),
+                }
+            )
+            reports = runner.run_meeting(
+                context,
+                use_llm=use_llm,
+                max_turns=discussion_settings["max_rounds"],
+                min_turns=discussion_settings["min_turns"],
+                max_roles_per_turn=discussion_settings["max_roles_per_round"],
+                allow_repeat_roles=discussion_settings["allow_repeat_roles"],
+            )
+        else:
+            reports = runner.run_all(context, use_llm=use_llm)
+        self._emit_progress(
+            progress_callback,
+            "synthesis_start",
+            message="Synthesizing role reports into experiment arms.",
+            role_count=len(reports),
+        )
         now = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         run_id = run_id or f"agent_strategy_{now}"
         arms = self._build_experiment_arms(reports)
@@ -108,6 +167,14 @@ class StrategyIterationOrchestrator:
                 "Implement only the chosen arm with disabled-by-default config where possible.",
                 "Run the validation ladder from cheapest to most expensive.",
             ],
+            discussion_decisions=runner.chair_decisions,
+        )
+        self._emit_progress(
+            progress_callback,
+            "synthesis_done",
+            message="Experiment plan synthesized.",
+            run_id=run_id,
+            arm_count=len(arms),
         )
         return StrategyIterationRun(
             run_id=run_id,
@@ -115,8 +182,11 @@ class StrategyIterationOrchestrator:
             generated_at=plan.generated_at,
             context=context,
             plan=plan,
+            discussion_mode=discussion_mode,
+            discussion_settings=discussion_settings,
             prompts=load_prompt_catalog(),
             role_traces=runner.traces,
+            discussion_trace=runner.discussion_trace,
         )
 
     def create_plan(
@@ -125,8 +195,27 @@ class StrategyIterationOrchestrator:
         *,
         use_llm: bool = False,
         run_id: Optional[str] = None,
+        discussion_mode: Optional[str] = None,
+        meeting_max_rounds: Optional[int] = None,
+        meeting_max_roles_per_round: Optional[int] = None,
     ) -> StrategyIterationPlan:
-        return self.build_run(objective, use_llm=use_llm, run_id=run_id).plan
+        return self.build_run(
+            objective,
+            use_llm=use_llm,
+            run_id=run_id,
+            discussion_mode=discussion_mode,
+            meeting_max_rounds=meeting_max_rounds,
+            meeting_max_roles_per_round=meeting_max_roles_per_round,
+        ).plan
+
+    @staticmethod
+    def _emit_progress(progress_callback: ProgressCallback | None, stage: str, **payload) -> None:
+        if not progress_callback:
+            return
+        try:
+            progress_callback("progress", stage=stage, **payload)
+        except Exception:
+            pass
 
     def save_run(self, run: StrategyIterationRun, *, append_memory: bool = True) -> Path:
         run_dir = self.output_dir / run.run_id
@@ -143,10 +232,22 @@ class StrategyIterationOrchestrator:
             encoding="utf-8",
         )
         (run_dir / "role_traces.md").write_text(self._role_traces_to_markdown(run), encoding="utf-8")
+        (run_dir / "discussion_trace.json").write_text(
+            json.dumps(run.discussion_trace, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (run_dir / "discussion_trace.md").write_text(self._discussion_trace_to_markdown(run), encoding="utf-8")
         if append_memory:
             approved = [arm.arm_id for arm in run.plan.experiment_arms if not arm.requires_approval]
             StrategyAgentMemoryLog(self.memory_log_path).append_plan(run.plan, approved)
         return run_dir
+
+    @staticmethod
+    def _normalize_discussion_mode(value: str) -> str:
+        normalized = (value or DISCUSSION_SEQUENTIAL).strip().lower()
+        if normalized in {DISCUSSION_MEETING, "adaptive", "chair"}:
+            return DISCUSSION_MEETING
+        return DISCUSSION_SEQUENTIAL
 
     @staticmethod
     def _role_traces_to_markdown(run: StrategyIterationRun) -> str:
@@ -186,6 +287,38 @@ class StrategyIterationOrchestrator:
                     "",
                 ]
             )
+        return "\n".join(lines) + "\n"
+
+    @staticmethod
+    def _discussion_trace_to_markdown(run: StrategyIterationRun) -> str:
+        lines = [
+            f"# Agent Discussion Trace: {run.run_id}",
+            "",
+            f"- Generated: {run.generated_at}",
+            f"- Objective: {run.objective}",
+            "",
+        ]
+        if not run.discussion_trace:
+            lines.append("Sequential mode: no virtual chair decisions were used.")
+            return "\n".join(lines) + "\n"
+        for item in run.discussion_trace:
+            decision = item.get("chair_decision") or {}
+            lines.extend(
+                [
+                    f"## Turn {item.get('turn_index')}",
+                    "",
+                    f"- Action: {decision.get('action')}",
+                    f"- Called roles: {', '.join(item.get('called_roles') or []) or item.get('called_role') or 'none'}",
+                    f"- Next roles: {', '.join(decision.get('next_roles') or []) or decision.get('next_role') or 'none'}",
+                    f"- Decision: {decision.get('decision')}",
+                    f"- Confidence: {decision.get('confidence')}",
+                    f"- Focus: {decision.get('focus') or 'none'}",
+                    f"- Rationale: {decision.get('rationale') or 'none'}",
+                    "",
+                ]
+            )
+            if decision.get("final_summary"):
+                lines.extend(["Final summary:", str(decision.get("final_summary")), ""])
         return "\n".join(lines) + "\n"
 
     @staticmethod

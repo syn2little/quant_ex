@@ -52,6 +52,8 @@ config/notify.yaml
 config/agent_strategy_iteration.yaml
 # Use agent_strategy_iteration.example.yaml as template instead
 docs/strategy_log/agent_runs/
+/.agent_worktrees/
+/.agent_task_artifacts/
 # Agent run bundles are local/generated; force-add a curated sample only when needed
 
 # If user has a local override config

@@ -82,9 +82,44 @@ Deliverables:
 Exit criteria:
 - planning runs are visible and traceable from the existing research UI
 
+## Phase 6
+
+Objective:
+- Add an optional meeting-style discussion mode without removing the legacy sequential role runner.
+
+Deliverables:
+- `discussion_mode=sequential|meeting` in CLI, Web API, and Agent Runs create UI
+- virtual chair decisions that select the next useful role or end the meeting
+- configurable `meeting_max_rounds` and `meeting_max_roles_per_round` limits at run creation time
+- `discussion_trace.json` / `discussion_trace.md` artifacts per run
+- default offline fallback agenda for reproducible tests and no-LLM smoke runs
+
+Exit criteria:
+- `sequential` remains the default compatible behavior
+- `meeting` records why each role participated, which roles were called in each round, and when the chair considered the discussion complete
+- LLM mode lets the chair choose role participation dynamically, while no-LLM mode stays deterministic
+
+## Phase 7
+
+Objective:
+- Add a reserved local coding-agent execution layer on top of LLM discussion and approval gates.
+
+Deliverables:
+- `--use-agent` CLI option that writes `agent_tasks.json` / `agent_tasks.md`
+- `agent_approval_template.yaml` with task prompt hashes and explicit approvals
+- Codex CLI provider support through `codex exec`
+- `readonly`, `patch`, and reserved `danger-full-access` modes
+- isolated git worktree execution for `patch` mode
+- Web Agent Runs create options to generate Codex task proposals
+
+Exit criteria:
+- agent tasks are proposal-only unless an approval file matches task id and prompt hash
+- `danger-full-access` is available only as an explicitly selected high-risk mode and carries a warning
+- generated artifacts are browsable from Agent Runs, while execution remains approval-gated
+
 ## Current Execution Choice
 
-Phase 1 through Phase 5 have been implemented. The current agent layer can build offline plans, parse feedback CSVs, produce gated command proposals with `commands.json` / `commands.md`, write `approval_template.yaml`, execute only explicitly approved commands whose `command_id` and `command_sha256` match the current plan, summarize execution in `execution_summary.md`, detect backtest/WFV CSV candidates for Phase 3 feedback handoff, and expose run artifacts in the Web Dashboard. `--execute-safe` remains limited to local low-risk checks; training, backtest, WFV, data fetch/update, notifications, and trading-like commands require an approval file entry before execution. The dashboard currently supports browse/create/regenerate approval template only, not command execution.
+Phase 1 through Phase 7 have been implemented. The current agent layer can build offline plans, parse feedback CSVs, produce gated command proposals with `commands.json` / `commands.md`, write `approval_template.yaml`, execute only explicitly approved commands whose `command_id` and `command_sha256` match the current plan, summarize execution in `execution_summary.md`, detect backtest/WFV CSV candidates for Phase 3 feedback handoff, expose run artifacts in the Web Dashboard, optionally run in `meeting` mode where a virtual chair chooses which roles should participate, and generate local Codex task proposals through `--use-agent`. `--execute-safe` remains limited to local low-risk checks; training, backtest, WFV, data fetch/update, notifications, trading-like commands, and coding-agent tasks require explicit approval before execution.
 
 ## Full-Cycle Validation
 

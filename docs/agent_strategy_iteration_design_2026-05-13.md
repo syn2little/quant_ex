@@ -38,12 +38,15 @@ Implemented modules:
 
 - `agent/strategy_iteration/schemas.py`: role reports, plans, run bundles, command proposals, feedback objects
 - `agent/strategy_iteration/context.py`: local context pack from strategy/system logs, candidates, configs, artifacts, and memory
-- `agent/strategy_iteration/roles.py`: offline and LLM role execution with upstream role carry-over
+- `agent/strategy_iteration/roles.py`: offline and LLM role execution with upstream role carry-over plus optional virtual-chair meeting mode
 - `agent/strategy_iteration/llm.py`: OpenAI-compatible quick/deep tier client, including streaming responses
 - `agent/strategy_iteration/execution.py`: command proposals, risk tags, approval templates, command hash matching, execution summaries
+- `agent/strategy_iteration/agent_execution.py`: approved local coding-agent task proposals and Codex CLI execution scaffolding
 - `agent/strategy_iteration/evaluator.py`: backtest/WFV CSV feedback parsing
 - `run_agent_strategy_iteration.py`: CLI for planning, command proposal, approved execution, and feedback handoff
 - `/api/agents` and Web `Agent Runs` page: browse/create agent runs and regenerate approval templates
+- Discussion modes: default `sequential` preserves fixed role order; optional `meeting` lets a virtual chair select necessary roles and stop the discussion when enough evidence exists. Meeting runs have configurable caps for total rounds and roles per round.
+- Coding-agent layer: optional `--use-agent` writes `agent_tasks.*` and `agent_approval_template.yaml`; `readonly` / `patch` / reserved `danger-full-access` modes remain approval-gated before any local Codex CLI execution.
 
 Full-cycle validation:
 

@@ -1,12 +1,33 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from .llm import OpenAICompatibleChatClient
 from .prompt_loader import load_prompt
-from .schemas import AgentRole, RoleReport, StrategyProjectContext
+from .schemas import AgentRole, ChairDecision, RoleReport, StrategyProjectContext
 from .validation import attach_role_metadata
+
+
+def _is_rejecting_research_verdict(verdict: str) -> bool:
+    value = verdict.lower()
+    return any(token in value for token in ["reject", "block", "kill", "do_not", "degraded", "refute"])
+
+
+def _fallback_focus(role_name: str, reports: List[RoleReport]) -> str:
+    if role_name == "data_factor_analyst":
+        return "Identify whether the objective needs data/factor evidence before any model or execution work."
+    if role_name == "backtest_analyst":
+        return "Define the minimum comparable validation path and control arm."
+    if role_name == "bear_researcher":
+        return "Attack the current proposal and name kill tests."
+    if role_name == "experiment_designer":
+        return "Convert the strongest surviving idea into one-variable experiment arms."
+    if role_name == "research_portfolio_manager":
+        return "Decide whether the discussion is ready for a bounded experiment plan."
+    if reports:
+        return f"Respond to the latest uncertainty raised by {reports[-1].role}."
+    return "Contribute only the perspective needed for the current objective."
 
 
 DEFAULT_ROLES: List[AgentRole] = [
@@ -85,6 +106,7 @@ DEFAULT_ROLES: List[AgentRole] = [
         required_outputs=["decision", "approved arms", "blocked arms", "validation ladder"],
     ),
 ]
+ProgressCallback = Callable[..., None]
 
 
 class RoleRunner:
@@ -95,10 +117,14 @@ class RoleRunner:
         roles: Optional[Iterable[AgentRole]] = None,
         *,
         llm_config: Optional[Dict[str, Any]] = None,
+        progress_callback: ProgressCallback | None = None,
     ) -> None:
         self.roles = list(roles or DEFAULT_ROLES)
         self.llm_config = llm_config or {}
+        self.progress_callback = progress_callback
         self.traces: List[Dict[str, Any]] = []
+        self.discussion_trace: List[Dict[str, Any]] = []
+        self.chair_decisions: List[ChairDecision] = []
 
     def run_all(
         self,
@@ -107,9 +133,184 @@ class RoleRunner:
         use_llm: bool = False,
     ) -> List[RoleReport]:
         self.traces = []
+        self.discussion_trace = []
+        self.chair_decisions = []
         reports: List[RoleReport] = []
-        for role in self.roles:
-            reports.append(self.run_role(role, context, reports, use_llm=use_llm))
+        total = len(self.roles)
+        for index, role in enumerate(self.roles, start=1):
+            self._emit_progress(
+                "role_start",
+                message=f"Running role {role.name}.",
+                role=role.name,
+                model_tier=role.model_tier,
+                index=index,
+                total=total,
+                use_llm=use_llm,
+                discussion_mode="sequential",
+            )
+            report = self.run_role(role, context, reports, use_llm=use_llm)
+            reports.append(report)
+            self._emit_progress(
+                "role_done",
+                message=f"Role {role.name} completed.",
+                role=role.name,
+                verdict=report.verdict,
+                confidence=report.confidence,
+                index=index,
+                total=total,
+                discussion_mode="sequential",
+            )
+        return reports
+
+    def run_meeting(
+        self,
+        context: StrategyProjectContext,
+        *,
+        use_llm: bool = False,
+        max_turns: int = 8,
+        min_turns: int = 4,
+        max_roles_per_turn: int = 1,
+        allow_repeat_roles: bool = False,
+    ) -> List[RoleReport]:
+        """Run an adaptive virtual meeting chaired by an LLM when configured.
+
+        The chair decides which role is needed next and when the discussion is
+        sufficiently converged. Offline mode uses a compact deterministic agenda
+        so tests and local dry runs remain reproducible.
+        """
+
+        self.traces = []
+        self.discussion_trace = []
+        self.chair_decisions = []
+        reports: List[RoleReport] = []
+        called_roles: set[str] = set()
+        max_turns = max(1, int(max_turns))
+        min_turns = max(1, int(min_turns))
+        max_roles_per_turn = max(1, min(int(max_roles_per_turn), len(self.roles)))
+
+        for turn_index in range(1, max_turns + 1):
+            self._emit_progress(
+                "chair_start",
+                message=f"Meeting chair is selecting role(s) for round {turn_index}.",
+                turn_index=turn_index,
+                max_turns=max_turns,
+                reports_count=len(reports),
+                discussion_mode="meeting",
+            )
+            decision = self._chair_decide(
+                context,
+                reports,
+                turn_index=turn_index,
+                use_llm=use_llm,
+                min_turns=min_turns,
+                max_turns=max_turns,
+                max_roles_per_turn=max_roles_per_turn,
+                called_roles=called_roles,
+                allow_repeat_roles=allow_repeat_roles,
+            )
+            self._emit_progress(
+                "chair_done",
+                message=f"Chair decision for round {turn_index}: {decision.action}.",
+                turn_index=turn_index,
+                action=decision.action,
+                next_role=decision.next_role,
+                next_roles=decision.next_roles,
+                focus=decision.focus,
+                discussion_mode="meeting",
+            )
+            if decision.action == "final" and len(reports) >= min_turns:
+                self.chair_decisions.append(decision)
+                self.discussion_trace.append(
+                    {
+                        "turn_index": turn_index,
+                        "chair_decision": decision.to_dict(),
+                        "used_llm": use_llm,
+                        "called_role": None,
+                    }
+                )
+                break
+
+            roles_to_call = self._roles_for_decision(
+                decision,
+                called_roles=called_roles,
+                reports=reports,
+                max_roles_per_turn=max_roles_per_turn,
+                allow_repeat_roles=allow_repeat_roles,
+            )
+            if not roles_to_call:
+                decision.action = "final"
+                self.chair_decisions.append(decision)
+                self.discussion_trace.append(
+                    {
+                        "turn_index": turn_index,
+                        "chair_decision": decision.to_dict(),
+                        "used_llm": use_llm,
+                        "called_role": None,
+                    }
+                )
+                break
+
+            decision.action = "call_role"
+            decision.next_roles = [role.name for role in roles_to_call]
+            decision.next_role = decision.next_roles[0]
+            self.chair_decisions.append(decision)
+            called_this_turn: list[str] = []
+            for role_index, role in enumerate(roles_to_call, start=1):
+                self._emit_progress(
+                    "role_start",
+                    message=f"Round {turn_index}: running role {role.name}.",
+                    role=role.name,
+                    model_tier=role.model_tier,
+                    turn_index=turn_index,
+                    index=role_index,
+                    total=len(roles_to_call),
+                    use_llm=use_llm,
+                    discussion_mode="meeting",
+                )
+                report = self.run_role(role, context, reports, use_llm=use_llm, chair_focus=decision.focus)
+                reports.append(report)
+                called_roles.add(role.name)
+                called_this_turn.append(role.name)
+                self._emit_progress(
+                    "role_done",
+                    message=f"Round {turn_index}: role {role.name} completed.",
+                    role=role.name,
+                    verdict=report.verdict,
+                    confidence=report.confidence,
+                    turn_index=turn_index,
+                    index=role_index,
+                    total=len(roles_to_call),
+                    discussion_mode="meeting",
+                )
+            self.discussion_trace.append(
+                {
+                    "turn_index": turn_index,
+                    "chair_decision": decision.to_dict(),
+                    "used_llm": use_llm,
+                    "called_role": called_this_turn[0] if called_this_turn else None,
+                    "called_roles": called_this_turn,
+                }
+            )
+
+        if not any(item.action == "final" for item in self.chair_decisions):
+            final = ChairDecision(
+                turn_index=len(self.chair_decisions) + 1,
+                action="final",
+                decision="continue",
+                rationale="Reached the configured meeting turn budget.",
+                final_summary="Meeting stopped at the configured max_turns; use the collected reports for synthesis.",
+                confidence=0.6,
+            )
+            self.chair_decisions.append(final)
+            self.discussion_trace.append(
+                {
+                    "turn_index": final.turn_index,
+                    "chair_decision": final.to_dict(),
+                    "used_llm": use_llm,
+                    "called_role": None,
+                }
+            )
+
         return reports
 
     def run_role(
@@ -119,30 +320,55 @@ class RoleRunner:
         prior_reports: List[RoleReport],
         *,
         use_llm: bool = False,
+        chair_focus: str = "",
     ) -> RoleReport:
-        system, user = self._build_prompt(role, context, prior_reports)
+        system, user = self._build_prompt(role, context, prior_reports, chair_focus=chair_focus)
         if use_llm:
             client = OpenAICompatibleChatClient.from_env(model_tier=role.model_tier, llm_config=self.llm_config)
             if client.is_configured:
-                payload = client.complete_json(system=system, user=user)
-                report = RoleReport.from_dict(
-                    role.name,
-                    payload,
-                    raw_response=json.dumps(payload, ensure_ascii=False),
+                self._emit_progress(
+                    "role_llm_start",
+                    message=f"Calling LLM for role {role.name}.",
+                    role=role.name,
+                    model=client.model,
+                    model_tier=role.model_tier,
+                    reasoning_effort=client.reasoning_effort,
                 )
-                report = attach_role_metadata(role, report, prior_reports)
-                self.traces.append(
-                    self._build_trace(
-                        role=role,
-                        prior_reports=prior_reports,
-                        system_prompt=system,
-                        user_prompt=user,
-                        report=report,
-                        used_llm=True,
-                        client=client,
+                try:
+                    payload = client.complete_json(system=system, user=user)
+                    report = RoleReport.from_dict(
+                        role.name,
+                        payload,
+                        raw_response=json.dumps(payload, ensure_ascii=False),
                     )
-                )
-                return report
+                    report = attach_role_metadata(role, report, prior_reports)
+                    self.traces.append(
+                        self._build_trace(
+                            role=role,
+                            prior_reports=prior_reports,
+                            system_prompt=system,
+                            user_prompt=user,
+                            report=report,
+                            used_llm=True,
+                            client=client,
+                            chair_focus=chair_focus,
+                        )
+                    )
+                    self._emit_progress(
+                        "role_llm_done",
+                        message=f"LLM response received for role {role.name}.",
+                        role=role.name,
+                        model=client.model,
+                    )
+                    return report
+                except Exception as exc:
+                    self._emit_progress(
+                        "role_llm_error",
+                        message=f"LLM call failed for role {role.name}; falling back to offline role logic.",
+                        role=role.name,
+                        model=client.model,
+                        error=str(exc),
+                    )
         report = attach_role_metadata(role, self._fallback_report(role, context, prior_reports), prior_reports)
         self.traces.append(
             self._build_trace(
@@ -153,9 +379,194 @@ class RoleRunner:
                 report=report,
                 used_llm=False,
                 client=None,
+                chair_focus=chair_focus,
             )
         )
         return report
+
+    def _emit_progress(self, stage: str, **payload) -> None:
+        if not self.progress_callback:
+            return
+        try:
+            self.progress_callback("progress", stage=stage, **payload)
+        except Exception:
+            pass
+
+    def _chair_decide(
+        self,
+        context: StrategyProjectContext,
+        reports: List[RoleReport],
+        *,
+        turn_index: int,
+        use_llm: bool,
+        min_turns: int,
+        max_turns: int,
+        max_roles_per_turn: int,
+        called_roles: set[str],
+        allow_repeat_roles: bool,
+    ) -> ChairDecision:
+        if use_llm:
+            client = OpenAICompatibleChatClient.from_env(model_tier="deep", llm_config=self.llm_config)
+            if client.is_configured:
+                system, user = self._build_chair_prompt(
+                    context,
+                    reports,
+                    turn_index=turn_index,
+                    min_turns=min_turns,
+                    max_turns=max_turns,
+                    max_roles_per_turn=max_roles_per_turn,
+                    called_roles=called_roles,
+                    allow_repeat_roles=allow_repeat_roles,
+                )
+                try:
+                    payload = client.complete_json(system=system, user=user, max_tokens=min(client.max_tokens, 1200))
+                    decision = ChairDecision.from_dict(turn_index, payload)
+                    return self._normalize_chair_decision(
+                        decision,
+                        reports=reports,
+                        called_roles=called_roles,
+                        min_turns=min_turns,
+                        allow_repeat_roles=allow_repeat_roles,
+                        max_roles_per_turn=max_roles_per_turn,
+                    )
+                except Exception as exc:
+                    self._emit_progress(
+                        "chair_llm_error",
+                        message="Meeting chair LLM call failed; using offline chair fallback.",
+                        turn_index=turn_index,
+                        model=client.model,
+                        error=str(exc),
+                    )
+        return self._fallback_chair_decision(
+            reports,
+            turn_index=turn_index,
+            min_turns=min_turns,
+            called_roles=called_roles,
+            max_roles_per_turn=max_roles_per_turn,
+        )
+
+    def _normalize_chair_decision(
+        self,
+        decision: ChairDecision,
+        *,
+        reports: List[RoleReport],
+        called_roles: set[str],
+        min_turns: int,
+        allow_repeat_roles: bool,
+        max_roles_per_turn: int,
+    ) -> ChairDecision:
+        decision.action = decision.action if decision.action in {"call_role", "final"} else "call_role"
+        if decision.action == "final" and len(reports) < min_turns:
+            decision.action = "call_role"
+            decision.rationale = (decision.rationale + " " if decision.rationale else "") + (
+                "Minimum meeting turns have not been reached."
+            )
+        roles = self._roles_for_decision(
+            decision,
+            called_roles=called_roles,
+            reports=reports,
+            max_roles_per_turn=max_roles_per_turn,
+            allow_repeat_roles=allow_repeat_roles,
+        )
+        if decision.action == "call_role":
+            decision.next_roles = [role.name for role in roles]
+            decision.next_role = decision.next_roles[0] if decision.next_roles else ""
+            if len(decision.next_roles) == 0:
+                decision.rationale = (decision.rationale + " " if decision.rationale else "") + (
+                    "No valid role remained for this round."
+                )
+        return decision
+
+    def _fallback_chair_decision(
+        self,
+        reports: List[RoleReport],
+        *,
+        turn_index: int,
+        min_turns: int,
+        called_roles: set[str],
+        max_roles_per_turn: int,
+    ) -> ChairDecision:
+        if len(reports) >= min_turns and "research_portfolio_manager" in called_roles:
+            return ChairDecision(
+                turn_index=turn_index,
+                action="final",
+                decision="continue",
+                rationale="Offline meeting reached minimum coverage and has a decision-capable report.",
+                final_summary="Offline fallback meeting completed with enough analyst, adversarial, and decision context.",
+                confidence=0.7,
+            )
+        roles = self._fallback_next_roles(called_roles, reports, limit=max_roles_per_turn)
+        return ChairDecision(
+            turn_index=turn_index,
+            action="call_role",
+            next_role=roles[0].name if roles else "",
+            next_roles=[role.name for role in roles],
+            rationale="Offline fallback selected the next role needed for balanced coverage.",
+            focus=_fallback_focus(roles[0].name if roles else "", reports),
+            decision="continue",
+            confidence=0.65,
+        )
+
+    def _roles_for_decision(
+        self,
+        decision: ChairDecision,
+        *,
+        called_roles: set[str],
+        reports: List[RoleReport],
+        max_roles_per_turn: int,
+        allow_repeat_roles: bool,
+    ) -> List[AgentRole]:
+        requested = decision.next_roles or ([decision.next_role] if decision.next_role else [])
+        roles: list[AgentRole] = []
+        seen: set[str] = set()
+        for name in requested:
+            role = self._role_by_name(name)
+            if role is None or role.name in seen:
+                continue
+            if not allow_repeat_roles and role.name in called_roles:
+                continue
+            roles.append(role)
+            seen.add(role.name)
+            if len(roles) >= max_roles_per_turn:
+                break
+        if roles:
+            return roles
+
+        fallback_roles = self._fallback_next_roles(called_roles, reports, limit=max_roles_per_turn)
+        if fallback_roles and not decision.rationale:
+            decision.rationale = "Fallback selected the next uncovered role(s)."
+        return fallback_roles
+
+    def _fallback_next_role(self, called_roles: set[str], reports: List[RoleReport]) -> Optional[AgentRole]:
+        preferred = [
+            "data_factor_analyst",
+            "backtest_analyst",
+            "bear_researcher",
+            "experiment_designer",
+            "research_portfolio_manager",
+        ]
+        if any(_is_rejecting_research_verdict(report.verdict) for report in reports):
+            preferred = ["bear_researcher", "conservative_risk_reviewer", "research_portfolio_manager"]
+        for name in preferred:
+            role = self._role_by_name(name)
+            if role and role.name not in called_roles:
+                return role
+        return next((role for role in self.roles if role.name not in called_roles), None)
+
+    def _fallback_next_roles(self, called_roles: set[str], reports: List[RoleReport], *, limit: int) -> List[AgentRole]:
+        roles: list[AgentRole] = []
+        while len(roles) < limit:
+            shadow_called = called_roles | {role.name for role in roles}
+            role = self._fallback_next_role(shadow_called, reports)
+            if role is None:
+                break
+            roles.append(role)
+            if role.name == "research_portfolio_manager":
+                break
+        return roles
+
+    def _role_by_name(self, name: str) -> Optional[AgentRole]:
+        return next((role for role in self.roles if role.name == name), None)
 
     @staticmethod
     def _build_trace(
@@ -167,6 +578,7 @@ class RoleRunner:
         report: RoleReport,
         used_llm: bool,
         client: Optional[OpenAICompatibleChatClient],
+        chair_focus: str = "",
     ) -> Dict[str, Any]:
         return {
             "role": role.name,
@@ -178,6 +590,7 @@ class RoleRunner:
             "max_tokens": client.max_tokens if client else None,
             "stream": client.stream if client else None,
             "upstream_roles": [item.role for item in prior_reports],
+            "chair_focus": chair_focus,
             "system_prompt": system_prompt,
             "user_prompt": user_prompt,
             "raw_response": report.raw_response,
@@ -189,6 +602,8 @@ class RoleRunner:
         role: AgentRole,
         context: StrategyProjectContext,
         prior_reports: List[RoleReport],
+        *,
+        chair_focus: str = "",
     ) -> tuple[str, str]:
         system = (
             load_prompt("shared_system").strip()
@@ -203,6 +618,56 @@ class RoleRunner:
                 "context": context.to_prompt_dict(),
                 "prior_reports": [r.to_dict() for r in prior_reports],
                 "upstream_role_order": [r.role for r in prior_reports],
+                "chair_focus": chair_focus,
+            },
+            ensure_ascii=False,
+            default=str,
+        )
+        return system, user
+
+    def _build_chair_prompt(
+        self,
+        context: StrategyProjectContext,
+        reports: List[RoleReport],
+        *,
+        turn_index: int,
+        min_turns: int,
+        max_turns: int,
+        max_roles_per_turn: int,
+        called_roles: set[str],
+        allow_repeat_roles: bool,
+    ) -> tuple[str, str]:
+        system = (
+            "You are the virtual meeting chair for a quant strategy-iteration agent team. "
+            "Decide which specialist role should speak next, or finish the meeting when enough evidence exists. "
+            "Do not call every role mechanically. Call a role only if its perspective is useful for the current uncertainty. "
+            "You may call multiple roles in the same round, but never exceed max_roles_per_round. "
+            "Finish only when the discussion has enough data/factor, validation, risk, and decision coverage. "
+            "Output strictly valid JSON with keys: action, next_roles, rationale, focus, decision, final_summary, confidence. "
+            "action must be call_role or final."
+        )
+        available_roles = [
+            role.to_dict()
+            for role in self.roles
+            if allow_repeat_roles or role.name not in called_roles
+        ]
+        user = json.dumps(
+            {
+                "objective": context.objective,
+                "turn_index": turn_index,
+                "min_turns": min_turns,
+                "max_turns": max_turns,
+                "max_roles_per_round": max_roles_per_turn,
+                "allow_repeat_roles": allow_repeat_roles,
+                "available_roles": available_roles,
+                "called_roles": sorted(called_roles),
+                "prior_reports": [report.to_dict() for report in reports],
+                "context_brief": {
+                    "selected_candidates": (context.candidate_summary or {}).get("selected", {}),
+                    "recent_memory": context.memory_context[-3:],
+                    "constraints": context.constraints,
+                    "repo_capabilities": context.repo_capabilities[:20],
+                },
             },
             ensure_ascii=False,
             default=str,

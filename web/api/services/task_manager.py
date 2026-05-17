@@ -72,6 +72,7 @@ class TaskManager:
         *args,
         page_key: Optional[str] = None,
         action_key: Optional[str] = None,
+        progress_callback_arg: Optional[str] = None,
         **kwargs,
     ) -> str:
         task_id = uuid.uuid4().hex[:12]
@@ -86,6 +87,11 @@ class TaskManager:
 
         async def _wrapper():
             loop = asyncio.get_event_loop()
+            if progress_callback_arg:
+                def _progress(event_type: str = "progress", **data):
+                    self.emit(task_id, event_type, data)
+
+                kwargs[progress_callback_arg] = _progress
             return await loop.run_in_executor(None, partial(fn, *args, **kwargs))
 
         bg = asyncio.create_task(self._run(task_id, _wrapper()))

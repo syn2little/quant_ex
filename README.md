@@ -317,8 +317,11 @@ optimization_results/walk_forward_<run_id>/
 - `docs/strategy_log/agent_runs/{run_id}/run.json`：完整 run bundle
 - `plan.md`：多角色汇总计划
 - `role_traces.json` / `role_traces.md`：每个 role 的 prompt、模型、上游角色、原始响应和结构化报告
+- `discussion_trace.json` / `discussion_trace.md`：meeting 模式下虚拟主持人的角色调度、每轮参与角色、参与理由和收敛判断；默认 sequential 模式为空追踪。创建 run 时可限制最大轮数和每轮最多角色数。
 - `commands.json` / `commands.md`：命令提案、风险标签和 command hash
 - `approval_template.yaml`：受保护命令的审批模板
+- `agent_tasks.json` / `agent_tasks.md`：可选 `--use-agent` 生成的本地 Codex/Claude 类 coding-agent 任务提案
+- `agent_approval_template.yaml`：coding-agent 任务审批模板，按 `task_id` + `prompt_sha256` 锁定
 - `feedback.json` / `feedback.md`：回测或 WFV CSV 回灌后的结果评价
 - `docs/strategy_log/agent_memory.md`：跨 run 的追加式 agent memory
 

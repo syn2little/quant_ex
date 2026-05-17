@@ -4,11 +4,14 @@ import { Badge } from "../components/ui/Badge";
 import { Card } from "../components/ui/Card";
 import { Skeleton, SkeletonTable } from "../components/ui/Skeleton";
 import { Tabs } from "../components/ui/Tabs";
-import { get, post } from "../api/client";
+import { del, get, post } from "../api/client";
 import { useSSE } from "../hooks/useSSE";
+import type { SSEEvent } from "../hooks/useSSE";
 import type { AgentRunCreateRequest, AgentRunDetail, AgentRunSummary } from "../api/types";
 
 type AgentTabKey = "plan" | "commands" | "summary" | "feedback" | "approval" | "raw";
+type DiscussionMode = "sequential" | "meeting";
+type AgentMode = "readonly" | "patch" | "danger-full-access";
 type AgentCommand = {
   command_id: string;
   command: string;
@@ -29,6 +32,29 @@ type FeedbackCandidate = {
   result_csv: string;
   ready?: boolean;
 };
+type AgentCommandResult = {
+  command_id: string;
+  skipped?: boolean;
+  returncode?: number | null;
+  started_at?: string | null;
+  ended_at?: string | null;
+  stdout_tail?: string;
+  stderr_tail?: string;
+  skip_reason?: string;
+  approval_reason?: string;
+};
+type CommandLogLine = {
+  stream: "stdout" | "stderr";
+  line: string;
+};
+type CommandLiveOutput = {
+  command_id: string;
+  command?: string;
+  stage?: string;
+  stdout_tail?: string;
+  stderr_tail?: string;
+  lines: CommandLogLine[];
+};
 
 const DETAIL_TABS: { key: AgentTabKey; labelKey: string }[] = [
   { key: "plan", labelKey: "agentRuns.plan" },
@@ -46,6 +72,8 @@ const ARTIFACT_KEYS = [
   { key: "fb", flag: "has_feedback", fields: ["feedback.md", "feedback.json", "feedback", "feedback_path"] },
   { key: "tpl", flag: "has_approval_template", fields: ["approval_template.yaml", "approval_template", "approval", "approval_template_path"] },
 ];
+const MAX_LIVE_LOG_LINES = 500;
+const PREVIEW_LOG_LINES = 5;
 
 function normalizeRunList(payload: AgentRunSummary[] | { runs?: AgentRunSummary[] }) {
   return Array.isArray(payload) ? payload : payload.runs ?? [];
@@ -94,6 +122,14 @@ function commandList(run: AgentRunDetail | null): AgentCommand[] {
   return Array.isArray(commands) ? (commands as AgentCommand[]) : [];
 }
 
+function commandResultMap(run: AgentRunDetail | null) {
+  const commandsPayload = artifactValue(run, "commands.json");
+  if (!commandsPayload || typeof commandsPayload !== "object" || Array.isArray(commandsPayload)) return new Map<string, AgentCommandResult>();
+  const results = (commandsPayload as Record<string, unknown>).results;
+  if (!Array.isArray(results)) return new Map<string, AgentCommandResult>();
+  return new Map((results as AgentCommandResult[]).map((result) => [result.command_id, result]));
+}
+
 function approvalMap(run: AgentRunDetail | null) {
   const entries = (run?.approval_entries ?? []) as ApprovalEntry[];
   return new Map(entries.map((entry) => [entry.command_id, entry]));
@@ -105,6 +141,110 @@ function feedbackCandidateMap(run: AgentRunDetail | null) {
   const candidates = (commandsPayload as Record<string, unknown>).feedback_candidates;
   if (!Array.isArray(candidates)) return new Map<string, FeedbackCandidate>();
   return new Map((candidates as FeedbackCandidate[]).map((candidate) => [candidate.command_id, candidate]));
+}
+
+function collectLiveCommandOutput(events: SSEEvent[]) {
+  const output = new Map<string, CommandLiveOutput>();
+  for (const event of events) {
+    if (event.type !== "progress") continue;
+    const data = event.data;
+    const commandId = typeof data.command_id === "string" ? data.command_id : "";
+    if (!commandId) continue;
+    const current = output.get(commandId) ?? { command_id: commandId, lines: [] };
+    if (typeof data.command === "string") current.command = data.command;
+    if (typeof data.stage === "string") current.stage = data.stage;
+    if (typeof data.stdout_tail === "string") current.stdout_tail = data.stdout_tail;
+    if (typeof data.stderr_tail === "string") current.stderr_tail = data.stderr_tail;
+    if (data.stage === "command_output" && typeof data.line === "string" && data.line) {
+      const stream = data.stream === "stderr" ? "stderr" : "stdout";
+      current.lines = [...current.lines, { stream, line: data.line }];
+      if (current.lines.length > MAX_LIVE_LOG_LINES) {
+        current.lines = current.lines.slice(-MAX_LIVE_LOG_LINES);
+      }
+    }
+    output.set(commandId, current);
+  }
+  return output;
+}
+
+function progressLine(data: Record<string, unknown>) {
+  const parts = [typeof data.message === "string" && data.message ? data.message : String(data.stage ?? "")];
+  if (typeof data.role === "string" && data.role) parts.push(`role=${data.role}`);
+  if (typeof data.turn_index === "number") parts.push(`round=${data.turn_index}`);
+  if (typeof data.index === "number" && typeof data.total === "number") parts.push(`${data.index}/${data.total}`);
+  if (typeof data.verdict === "string" && data.verdict) parts.push(`verdict=${data.verdict}`);
+  return parts.filter(Boolean).join(" | ");
+}
+
+function resultTailLines(result?: AgentCommandResult | null): CommandLogLine[] {
+  if (!result) return [];
+  const lines: CommandLogLine[] = [];
+  if (result.stdout_tail) {
+    lines.push(
+      ...result.stdout_tail
+        .replace(/\r\n/g, "\n")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => ({ stream: "stdout" as const, line: `${line}\n` }))
+    );
+  }
+  if (result.stderr_tail) {
+    lines.push(
+      ...result.stderr_tail
+        .replace(/\r\n/g, "\n")
+        .split("\n")
+        .filter(Boolean)
+        .map((line) => ({ stream: "stderr" as const, line: `${line}\n` }))
+    );
+  }
+  return lines.slice(-MAX_LIVE_LOG_LINES);
+}
+
+function CommandLogPreview({
+  lines,
+  expanded,
+  onToggle,
+  labels,
+}: {
+  lines: CommandLogLine[];
+  expanded: boolean;
+  onToggle: () => void;
+  labels: {
+    latestOutput: string;
+    showLog: string;
+    hideLog: string;
+    noOutputYet: string;
+  };
+}) {
+  const visibleLines = expanded ? lines : lines.slice(-PREVIEW_LOG_LINES);
+  return (
+    <div className="mt-2 rounded-sm border border-terminal-border bg-black/30">
+      <div className="flex items-center justify-between border-b border-terminal-border px-2 py-1">
+        <span className="font-mono text-[10px] uppercase tracking-wider text-terminal-text-dim">{labels.latestOutput}</span>
+        {lines.length > PREVIEW_LOG_LINES && (
+          <button
+            type="button"
+            onClick={onToggle}
+            className="font-mono text-[10px] text-terminal-cyan transition-colors hover:text-terminal-text-bright"
+          >
+            {expanded ? labels.hideLog : labels.showLog}
+          </button>
+        )}
+      </div>
+      <pre className={`${expanded ? "max-h-72" : "max-h-24"} overflow-auto whitespace-pre-wrap px-2 py-1.5 font-mono text-[11px] leading-5`}>
+        {visibleLines.length === 0 ? (
+          <span className="text-terminal-text-dim">{labels.noOutputYet}</span>
+        ) : (
+          visibleLines.map((item, index) => (
+            <div key={index} className={item.stream === "stderr" ? "text-terminal-amber" : "text-terminal-text"}>
+              <span className="select-none text-terminal-text-dim">[{item.stream}] </span>
+              <span>{item.line}</span>
+            </div>
+          ))
+        )}
+      </pre>
+    </div>
+  );
 }
 
 function statusVariant(status?: string) {
@@ -473,7 +613,13 @@ export function AgentRunsPage() {
   const [error, setError] = useState<string | null>(null);
   const [objective, setObjective] = useState("");
   const [runId, setRunId] = useState("");
+  const [discussionMode, setDiscussionMode] = useState<DiscussionMode>("sequential");
+  const [meetingMaxRounds, setMeetingMaxRounds] = useState(6);
+  const [meetingMaxRolesPerRound, setMeetingMaxRolesPerRound] = useState(1);
   const [useLlm, setUseLlm] = useState(false);
+  const [useAgent, setUseAgent] = useState(false);
+  const [agentMode, setAgentMode] = useState<AgentMode>("readonly");
+  const [agentMaxTasks, setAgentMaxTasks] = useState(2);
   const [proposeActions, setProposeActions] = useState(true);
   const [writeApprovalTemplate, setWriteApprovalTemplate] = useState(true);
   const [appendMemory, setAppendMemory] = useState(false);
@@ -482,7 +628,9 @@ export function AgentRunsPage() {
   const [pendingCreatedRunId, setPendingCreatedRunId] = useState<string | null>(null);
   const [executionTaskId, setExecutionTaskId] = useState<string | null>(null);
   const [approvalBusyId, setApprovalBusyId] = useState<string | null>(null);
+  const [deleteBusyRunId, setDeleteBusyRunId] = useState<string | null>(null);
   const [selectedCommandIds, setSelectedCommandIds] = useState<Set<string>>(new Set());
+  const [expandedCommandLogs, setExpandedCommandLogs] = useState<Set<string>>(new Set());
   const [regeneratingTemplate, setRegeneratingTemplate] = useState(false);
   const createTask = useSSE(createTaskId);
   const executionTask = useSSE(executionTaskId);
@@ -494,7 +642,12 @@ export function AgentRunsPage() {
       .then((payload) => {
         const nextRuns = normalizeRunList(payload);
         setRuns(nextRuns);
-        setSelectedRunId((current) => nextSelected ?? current ?? nextRuns[0]?.run_id ?? null);
+        setSelectedRunId((current) => {
+          const fallback = nextRuns[0]?.run_id ?? null;
+          if (nextSelected !== undefined) return nextSelected || fallback;
+          if (current && nextRuns.some((run) => run.run_id === current)) return current;
+          return fallback;
+        });
       })
       .catch((err: Error) => {
         setRuns([]);
@@ -605,6 +758,7 @@ export function AgentRunsPage() {
 
   const selectedDecision = (detail?.feedback_decision ?? selectedSummary?.feedback_decision) as string | undefined;
   const commands = useMemo(() => commandList(detail), [detail]);
+  const commandResults = useMemo(() => commandResultMap(detail), [detail]);
   const approvals = useMemo(() => approvalMap(detail), [detail]);
   const feedbackCandidates = useMemo(() => feedbackCandidateMap(detail), [detail]);
   const selectedCommands = useMemo(
@@ -615,25 +769,98 @@ export function AgentRunsPage() {
     () => selectedCommands.map((command) => command.command_id),
     [selectedCommands]
   );
+  const successfulCommandIds = useMemo(
+    () =>
+      new Set(
+        [...commandResults.values()]
+          .filter((result) => !result.skipped && result.returncode === 0)
+          .map((result) => result.command_id)
+      ),
+    [commandResults]
+  );
   const selectedSafeCommandIds = useMemo(
-    () => selectedCommands.filter((command) => !command.requires_approval).map((command) => command.command_id),
-    [selectedCommands]
+    () =>
+      selectedCommands
+        .filter((command) => !command.requires_approval && !successfulCommandIds.has(command.command_id))
+        .map((command) => command.command_id),
+    [selectedCommands, successfulCommandIds]
   );
   const selectedApprovedProtectedCommandIds = useMemo(
     () =>
       selectedCommands
-        .filter((command) => command.requires_approval && approvals.get(command.command_id)?.approved)
+        .filter(
+          (command) =>
+            command.requires_approval &&
+            approvals.get(command.command_id)?.approved &&
+            !successfulCommandIds.has(command.command_id)
+        )
         .map((command) => command.command_id),
-    [approvals, selectedCommands]
+    [approvals, selectedCommands, successfulCommandIds]
   );
   const selectedRunnableCommandIds = useMemo(
+    () =>
+      selectedCommands
+        .filter(
+          (command) =>
+            (!command.requires_approval || approvals.get(command.command_id)?.approved) &&
+            !successfulCommandIds.has(command.command_id)
+        )
+        .map((command) => command.command_id),
+    [approvals, selectedCommands, successfulCommandIds]
+  );
+  const selectedRunnableCommandIdSet = useMemo(() => new Set(selectedRunnableCommandIds), [selectedRunnableCommandIds]);
+  const selectedProtectedRunnableCount = selectedCommands.filter(
+    (command) => command.requires_approval && selectedRunnableCommandIdSet.has(command.command_id)
+  ).length;
+  const selectedExpensiveRunnableCount = selectedCommands.filter(
+    (command) =>
+      selectedRunnableCommandIdSet.has(command.command_id) &&
+      (command.risk_tags ?? []).some((tag) => ["expensive", "network", "external_effect", "trading_like"].includes(tag))
+  ).length;
+  const selectedSafeCount = selectedSafeCommandIds.length;
+  const selectedRerunnableSafeCommandIds = useMemo(
+    () => selectedCommands.filter((command) => !command.requires_approval).map((command) => command.command_id),
+    [selectedCommands]
+  );
+  const selectedRerunnableCommandIds = useMemo(
     () =>
       selectedCommands
         .filter((command) => !command.requires_approval || approvals.get(command.command_id)?.approved)
         .map((command) => command.command_id),
     [approvals, selectedCommands]
   );
-  const selectedSafeCount = selectedCommands.filter((command) => !command.requires_approval).length;
+  const latestExecutionProgress = useMemo(
+    () => [...executionTask.events].reverse().find((event) => event.type === "progress")?.data,
+    [executionTask.events]
+  );
+  const latestCreateProgress = useMemo(
+    () => [...createTask.events].reverse().find((event) => event.type === "progress")?.data,
+    [createTask.events]
+  );
+  const recentCreateProgress = useMemo(
+    () => createTask.events.filter((event) => event.type === "progress").slice(-6),
+    [createTask.events]
+  );
+  const liveCommandOutput = useMemo(
+    () => collectLiveCommandOutput(executionTask.events),
+    [executionTask.events]
+  );
+  const activeCommandOutput = useMemo(() => {
+    const commandId =
+      latestExecutionProgress && typeof latestExecutionProgress.command_id === "string"
+        ? latestExecutionProgress.command_id
+        : "";
+    return commandId ? liveCommandOutput.get(commandId) ?? null : null;
+  }, [latestExecutionProgress, liveCommandOutput]);
+  const logLabels = useMemo(
+    () => ({
+      latestOutput: t("agentRuns.latestOutput"),
+      showLog: t("agentRuns.showLog"),
+      hideLog: t("agentRuns.hideLog"),
+      noOutputYet: t("agentRuns.noOutputYet"),
+    }),
+    [t]
+  );
 
   useEffect(() => {
     setSelectedCommandIds(new Set());
@@ -651,9 +878,17 @@ export function AgentRunsPage() {
     if (!objective.trim()) return;
     const payload: AgentRunCreateRequest = {
       objective: objective.trim(),
+      discussion_mode: discussionMode,
+      meeting_max_rounds: discussionMode === "meeting" ? meetingMaxRounds : undefined,
+      meeting_max_roles_per_round: discussionMode === "meeting" ? meetingMaxRolesPerRound : undefined,
       use_llm: useLlm,
       propose_actions: proposeActions,
       write_approval_template: writeApprovalTemplate,
+      use_agent: useAgent,
+      agent_provider: "codex",
+      agent_mode: agentMode,
+      agent_max_tasks: agentMaxTasks,
+      write_agent_approval_template: true,
       append_memory: appendMemory,
     };
     if (runId.trim()) payload.run_id = runId.trim();
@@ -738,23 +973,41 @@ export function AgentRunsPage() {
     setSelectedCommandIds(new Set());
   };
 
-  const handleExecuteSafe = () => {
-    if (!selectedRunId || selectedSafeCommandIds.length === 0) return;
+  const toggleCommandLog = (commandId: string) => {
+    setExpandedCommandLogs((current) => {
+      const next = new Set(current);
+      if (next.has(commandId)) next.delete(commandId);
+      else next.add(commandId);
+      return next;
+    });
+  };
+
+  const handleExecuteSafe = (rerunSuccessful = false) => {
+    const commandIds = rerunSuccessful ? selectedRerunnableSafeCommandIds : selectedSafeCommandIds;
+    if (!selectedRunId || commandIds.length === 0) return;
     setError(null);
+    setExpandedCommandLogs(new Set());
     post<{ task_id: string; run_id: string }>(`/agents/runs/${encodeURIComponent(selectedRunId)}/execute-safe`, {
-      command_ids: selectedSafeCommandIds,
+      command_ids: commandIds,
+      skip_successful: !rerunSuccessful,
     })
       .then((payload) => setExecutionTaskId(payload.task_id))
       .catch((err: Error) => setError(err.message));
   };
 
-  const handleExecuteApproved = (includeSafe: boolean) => {
-    const commandIds = includeSafe ? selectedRunnableCommandIds : selectedApprovedProtectedCommandIds;
+  const handleExecuteApproved = (includeSafe: boolean, rerunSuccessful = false) => {
+    const commandIds = includeSafe
+      ? rerunSuccessful
+        ? selectedRerunnableCommandIds
+        : selectedRunnableCommandIds
+      : selectedApprovedProtectedCommandIds;
     if (!selectedRunId || commandIds.length === 0) return;
     setError(null);
+    setExpandedCommandLogs(new Set());
     post<{ task_id: string; run_id: string }>(`/agents/runs/${encodeURIComponent(selectedRunId)}/execute-approved`, {
       include_safe: includeSafe,
       command_ids: commandIds,
+      skip_successful: !rerunSuccessful,
     })
       .then((payload) => setExecutionTaskId(payload.task_id))
       .catch((err: Error) => setError(err.message));
@@ -769,6 +1022,27 @@ export function AgentRunsPage() {
     )
       .then((payload) => setExecutionTaskId(payload.task_id))
       .catch((err: Error) => setError(err.message));
+  };
+
+  const handleDeleteRun = (targetRunId: string) => {
+    if (!window.confirm(t("agentRuns.deleteConfirm", { runId: targetRunId }))) return;
+    const currentIndex = runs.findIndex((run) => run.run_id === targetRunId);
+    const nextSelected =
+      targetRunId === selectedRunId
+        ? runs[currentIndex + 1]?.run_id || runs[currentIndex - 1]?.run_id || null
+        : selectedRunId;
+    setDeleteBusyRunId(targetRunId);
+    setError(null);
+    del<{ run_id: string; deleted: boolean }>(`/agents/runs/${encodeURIComponent(targetRunId)}`)
+      .then(() => {
+        if (targetRunId === selectedRunId) {
+          setDetail(null);
+          setSelectedRunId(nextSelected);
+        }
+        fetchRuns(nextSelected || undefined);
+      })
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setDeleteBusyRunId(null));
   };
 
   return (
@@ -807,12 +1081,95 @@ export function AgentRunsPage() {
                   className="w-full rounded-sm border border-terminal-border bg-terminal-bg px-3 py-2 font-mono text-xs text-terminal-text outline-none focus:border-terminal-green"
                 />
               </div>
+              <div>
+                <FieldLabel>{t("agentRuns.discussionMode")}</FieldLabel>
+                <div className="grid grid-cols-2 gap-2">
+                  {(["sequential", "meeting"] as DiscussionMode[]).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setDiscussionMode(mode)}
+                      className={`rounded-sm border px-3 py-2 text-left font-mono text-xs transition-colors ${
+                        discussionMode === mode
+                          ? "border-terminal-green bg-terminal-green-glow text-terminal-green"
+                          : "border-terminal-border bg-terminal-bg text-terminal-text-dim hover:border-terminal-cyan hover:text-terminal-cyan"
+                      }`}
+                    >
+                      {t(`agentRuns.mode.${mode}`)}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              {discussionMode === "meeting" && (
+                <div className="grid grid-cols-2 gap-2">
+                  <label className="block">
+                    <FieldLabel>{t("agentRuns.maxRounds")}</FieldLabel>
+                    <input
+                      type="number"
+                      min={1}
+                      max={12}
+                      value={meetingMaxRounds}
+                      onChange={(event) => setMeetingMaxRounds(Math.max(1, Math.min(12, Number(event.target.value) || 1)))}
+                      className="w-full rounded-sm border border-terminal-border bg-terminal-bg px-3 py-2 font-mono text-xs text-terminal-text outline-none focus:border-terminal-green"
+                    />
+                  </label>
+                  <label className="block">
+                    <FieldLabel>{t("agentRuns.maxRolesPerRound")}</FieldLabel>
+                    <input
+                      type="number"
+                      min={1}
+                      max={4}
+                      value={meetingMaxRolesPerRound}
+                      onChange={(event) =>
+                        setMeetingMaxRolesPerRound(Math.max(1, Math.min(4, Number(event.target.value) || 1)))
+                      }
+                      className="w-full rounded-sm border border-terminal-border bg-terminal-bg px-3 py-2 font-mono text-xs text-terminal-text outline-none focus:border-terminal-green"
+                    />
+                  </label>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-2">
                 <ToggleField checked={useLlm} label={t("agentRuns.useLlm")} onChange={setUseLlm} />
+                <ToggleField checked={useAgent} label={t("agentRuns.useAgent")} onChange={setUseAgent} />
                 <ToggleField checked={proposeActions} label={t("agentRuns.proposeActions")} onChange={setProposeActions} />
                 <ToggleField checked={writeApprovalTemplate} label={t("agentRuns.approvalTemplate")} onChange={setWriteApprovalTemplate} />
                 <ToggleField checked={appendMemory} label={t("agentRuns.appendMemory")} onChange={setAppendMemory} />
               </div>
+              {useAgent && (
+                <div className="space-y-2 rounded-sm border border-terminal-border bg-terminal-bg p-3">
+                  <FieldLabel>{t("agentRuns.agentMode")}</FieldLabel>
+                  <div className="grid grid-cols-3 gap-2">
+                    {(["readonly", "patch", "danger-full-access"] as AgentMode[]).map((mode) => (
+                      <button
+                        key={mode}
+                        type="button"
+                        onClick={() => setAgentMode(mode)}
+                        className={`rounded-sm border px-2 py-1.5 text-left font-mono text-[11px] transition-colors ${
+                          agentMode === mode
+                            ? "border-terminal-green bg-terminal-green-glow text-terminal-green"
+                            : "border-terminal-border text-terminal-text-dim hover:border-terminal-cyan hover:text-terminal-cyan"
+                        }`}
+                      >
+                        {t(`agentRuns.agentModeOption.${mode}`)}
+                      </button>
+                    ))}
+                  </div>
+                  <label className="block">
+                    <FieldLabel>{t("agentRuns.agentMaxTasks")}</FieldLabel>
+                    <input
+                      type="number"
+                      min={1}
+                      max={5}
+                      value={agentMaxTasks}
+                      onChange={(event) => setAgentMaxTasks(Math.max(1, Math.min(5, Number(event.target.value) || 1)))}
+                      className="w-full rounded-sm border border-terminal-border bg-terminal-bg px-3 py-2 font-mono text-xs text-terminal-text outline-none focus:border-terminal-green"
+                    />
+                  </label>
+                  {agentMode === "danger-full-access" && (
+                    <p className="font-mono text-[11px] text-terminal-red">{t("agentRuns.agentDangerWarning")}</p>
+                  )}
+                </div>
+              )}
               <button
                 onClick={handleCreate}
                 disabled={creating || !objective.trim()}
@@ -821,11 +1178,30 @@ export function AgentRunsPage() {
                 {creating ? t("agentRuns.creating") : t("agentRuns.create")}
               </button>
               {createTaskId && (
-                <div className="flex items-center justify-between rounded-sm border border-terminal-border bg-terminal-bg px-3 py-2 font-mono text-[11px] text-terminal-text-dim">
-                  <span>task:{createTaskId.slice(0, 8)}</span>
-                  <Badge variant={createTask.status === "error" ? "error" : createTask.status === "done" ? "success" : "info"}>
-                    {createTask.status === "streaming" ? "running" : createTask.status}
-                  </Badge>
+                <div className="space-y-2 rounded-sm border border-terminal-border bg-terminal-bg px-3 py-2 font-mono text-[11px] text-terminal-text-dim">
+                  <div className="flex items-center justify-between gap-2">
+                    <span>task:{createTaskId.slice(0, 8)}</span>
+                    <Badge variant={createTask.status === "error" ? "error" : createTask.status === "done" ? "success" : "info"}>
+                      {createTask.status === "streaming" ? "running" : createTask.status}
+                    </Badge>
+                  </div>
+                  {latestCreateProgress && (
+                    <div className="rounded-sm border border-terminal-border/70 bg-black/20 px-2 py-1 text-terminal-text">
+                      <div className="flex flex-wrap items-center justify-between gap-2">
+                        <span>{progressLine(latestCreateProgress)}</span>
+                        <Badge variant="info">{String(latestCreateProgress.stage ?? "")}</Badge>
+                      </div>
+                    </div>
+                  )}
+                  {recentCreateProgress.length > 1 && (
+                    <div className="max-h-28 space-y-1 overflow-auto border-t border-terminal-border pt-2">
+                      {recentCreateProgress.map((event, index) => (
+                        <p key={index} className="truncate text-terminal-text-dim">
+                          {progressLine(event.data)}
+                        </p>
+                      ))}
+                    </div>
+                  )}
                 </div>
               )}
             </div>
@@ -849,22 +1225,39 @@ export function AgentRunsPage() {
             ) : (
               <div className="max-h-[560px] space-y-2 overflow-auto pr-1">
                 {runs.map((run) => (
-                  <button
+                  <div
                     key={run.run_id}
                     onClick={() => setSelectedRunId(run.run_id)}
-                    className={`w-full rounded-sm border px-3 py-2 text-left transition-colors ${
+                    className={`w-full cursor-pointer rounded-sm border px-3 py-2 text-left transition-colors ${
                       selectedRunId === run.run_id
                         ? "border-terminal-green bg-terminal-green-glow"
                         : "border-terminal-border bg-terminal-bg hover:border-terminal-text-dim"
                     }`}
+                    role="button"
+                    tabIndex={0}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") setSelectedRunId(run.run_id);
+                    }}
                   >
                     <div className="flex items-center justify-between gap-2">
                       <span className="truncate font-mono text-xs text-terminal-green">{run.run_id}</span>
-                      <div className="flex shrink-0 gap-1">
+                      <div className="flex shrink-0 items-center gap-1">
                         <Badge variant={statusVariant(run.status)}>{run.status ?? "unknown"}</Badge>
                         {typeof run.feedback_decision === "string" && (
                           <Badge variant={statusVariant(run.feedback_decision)}>{run.feedback_decision}</Badge>
                         )}
+                        <button
+                          type="button"
+                          onClick={(event) => {
+                            event.stopPropagation();
+                            handleDeleteRun(run.run_id);
+                          }}
+                          disabled={Boolean(executionTaskId) || Boolean(createTaskId) || deleteBusyRunId === run.run_id}
+                          className="rounded-sm border border-terminal-border px-1.5 py-0.5 font-mono text-[10px] text-terminal-text-dim transition-colors hover:border-terminal-red hover:text-terminal-red disabled:cursor-not-allowed disabled:opacity-40"
+                          title={t("agentRuns.deleteRun")}
+                        >
+                          {deleteBusyRunId === run.run_id ? t("agentRuns.deleting") : t("agentRuns.deleteRun")}
+                        </button>
                       </div>
                     </div>
                     <p className="mt-1 line-clamp-2 text-xs text-terminal-text-dim">
@@ -881,7 +1274,7 @@ export function AgentRunsPage() {
                         </Badge>
                       ))}
                     </div>
-                  </button>
+                  </div>
                 ))}
               </div>
             )}
@@ -990,10 +1383,24 @@ export function AgentRunsPage() {
                 {selectedCommandIdList.length === 0 && (
                   <p className="font-mono text-[11px] text-terminal-text-dim">{t("agentRuns.selectCommandsToExecute")}</p>
                 )}
+                {selectedCommandIdList.length > 0 && (
+                  <p className="font-mono text-[11px] text-terminal-text-dim">
+                    {t("agentRuns.executionSelectionSummary", {
+                      safe: selectedSafeCount,
+                      protected: selectedProtectedRunnableCount,
+                      expensive: selectedExpensiveRunnableCount,
+                    })}
+                  </p>
+                )}
+                {selectedExpensiveRunnableCount > 0 && (
+                  <p className="rounded-sm border border-terminal-amber bg-terminal-amber-glow px-3 py-2 font-mono text-[11px] text-terminal-amber">
+                    {t("agentRuns.expensiveExecutionWarning")}
+                  </p>
+                )}
 
                 <div className="flex flex-wrap gap-2">
                   <button
-                    onClick={handleExecuteSafe}
+                    onClick={() => handleExecuteSafe(false)}
                     disabled={Boolean(executionTaskId) || selectedSafeCount === 0}
                     className="rounded-sm border border-terminal-green px-3 py-1.5 font-mono text-xs text-terminal-green transition-colors hover:bg-terminal-green-glow disabled:cursor-not-allowed disabled:opacity-40"
                   >
@@ -1013,14 +1420,61 @@ export function AgentRunsPage() {
                   >
                     {t("agentRuns.executeSelectedApprovedWithSafe")}
                   </button>
+                  <button
+                    onClick={() => {
+                      if (detail?.has_approval_template) handleExecuteApproved(true, true);
+                      else handleExecuteSafe(true);
+                    }}
+                    disabled={
+                      Boolean(executionTaskId) ||
+                      (detail?.has_approval_template
+                        ? selectedRerunnableCommandIds.length === 0
+                        : selectedRerunnableSafeCommandIds.length === 0)
+                    }
+                    className="rounded-sm border border-terminal-border px-3 py-1.5 font-mono text-xs text-terminal-text-dim transition-colors hover:border-terminal-red hover:text-terminal-red disabled:cursor-not-allowed disabled:opacity-40"
+                  >
+                    {t("agentRuns.rerunSelected")}
+                  </button>
                 </div>
 
                 {executionTaskId && (
-                  <div className="flex items-center justify-between rounded-sm border border-terminal-border bg-terminal-bg px-3 py-2 font-mono text-[11px] text-terminal-text-dim">
-                    <span>task:{executionTaskId.slice(0, 8)}</span>
-                    <Badge variant={executionTask.status === "error" ? "error" : executionTask.status === "done" ? "success" : "info"}>
-                      {executionTask.status === "streaming" ? "running" : executionTask.status}
-                    </Badge>
+                  <div className="space-y-2 rounded-sm border border-terminal-border bg-terminal-bg px-3 py-2 font-mono text-[11px] text-terminal-text-dim">
+                    <div className="flex items-center justify-between">
+                      <span>task:{executionTaskId}</span>
+                      <Badge variant={executionTask.status === "error" ? "error" : executionTask.status === "done" ? "success" : "info"}>
+                        {executionTask.status === "streaming" ? "running" : executionTask.status}
+                      </Badge>
+                    </div>
+                    {latestExecutionProgress && (
+                      <div className="space-y-1">
+                        <div className="flex items-center justify-between gap-3">
+                          <span>
+                            {t("agentRuns.commandProgress", {
+                              index: String(latestExecutionProgress.index ?? "?"),
+                              total: String(latestExecutionProgress.total ?? "?"),
+                              stage: String(latestExecutionProgress.stage ?? ""),
+                            })}
+                          </span>
+                          <Badge variant={latestExecutionProgress.returncode === 0 ? "success" : latestExecutionProgress.skipped ? "info" : "warning"}>
+                            {String(latestExecutionProgress.command_id ?? "")}
+                          </Badge>
+                        </div>
+                        <p className="overflow-x-auto whitespace-nowrap text-terminal-text">
+                          {String(latestExecutionProgress.command ?? "")}
+                        </p>
+                        {Boolean(latestExecutionProgress.skip_reason) && (
+                          <p className="text-terminal-text-dim">{String(latestExecutionProgress.skip_reason)}</p>
+                        )}
+                        {activeCommandOutput && (
+                          <CommandLogPreview
+                            lines={activeCommandOutput.lines}
+                            expanded={expandedCommandLogs.has(activeCommandOutput.command_id)}
+                            onToggle={() => toggleCommandLog(activeCommandOutput.command_id)}
+                            labels={logLabels}
+                          />
+                        )}
+                      </div>
+                    )}
                   </div>
                 )}
 
@@ -1031,8 +1485,14 @@ export function AgentRunsPage() {
                     {commands.map((command) => {
                       const approval = approvals.get(command.command_id);
                       const feedbackCandidate = feedbackCandidates.get(command.command_id);
+                      const result = commandResults.get(command.command_id);
                       const approved = Boolean(approval?.approved);
                       const selected = selectedCommandIds.has(command.command_id);
+                      const succeeded = Boolean(result && !result.skipped && result.returncode === 0);
+                      const failed = Boolean(result && !result.skipped && result.returncode != null && result.returncode !== 0);
+                      const liveOutput = liveCommandOutput.get(command.command_id);
+                      const persistedLogLines = resultTailLines(result);
+                      const logLines = liveOutput?.lines.length ? liveOutput.lines : persistedLogLines;
                       return (
                         <div
                           key={command.command_id}
@@ -1057,6 +1517,9 @@ export function AgentRunsPage() {
                                 {command.requires_approval ? t("agentRuns.protected") : t("agentRuns.safeLocal")}
                               </Badge>
                               {approved && <Badge variant="success">{t("agentRuns.approved")}</Badge>}
+                              {succeeded && <Badge variant="success">{t("agentRuns.executed")}</Badge>}
+                              {failed && <Badge variant="error">{t("agentRuns.failed")}</Badge>}
+                              {result?.skipped && <Badge variant="info">{t("agentRuns.skipped")}</Badge>}
                             </div>
                             {command.requires_approval && (
                               <button
@@ -1084,6 +1547,24 @@ export function AgentRunsPage() {
                             <p className="mt-1 overflow-x-auto whitespace-nowrap font-mono text-[11px] text-terminal-text-dim">
                               {feedbackCandidate.ready ? t("agentRuns.feedbackReady") : t("agentRuns.feedbackPending")}: {feedbackCandidate.result_csv}
                             </p>
+                          )}
+                          {result && (
+                            <p className="mt-1 overflow-x-auto whitespace-nowrap font-mono text-[11px] text-terminal-text-dim">
+                              {t("agentRuns.lastResult")}:{" "}
+                              {result.skipped
+                                ? result.skip_reason || t("agentRuns.skipped")
+                                : result.returncode === 0
+                                  ? t("agentRuns.executed")
+                                  : `${t("agentRuns.failed")} (${result.returncode ?? "?"})`}
+                            </p>
+                          )}
+                          {logLines.length > 0 && (
+                            <CommandLogPreview
+                              lines={logLines}
+                              expanded={expandedCommandLogs.has(command.command_id)}
+                              onToggle={() => toggleCommandLog(command.command_id)}
+                              labels={logLabels}
+                            />
                           )}
                           <p className="mt-1 text-xs text-terminal-text-dim">{command.purpose || command.source}</p>
                         </div>

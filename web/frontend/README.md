@@ -11,7 +11,7 @@ React 19 + Vite + TypeScript + Tailwind CSS frontend for the local quant_ex dash
 - Signals: daily signal generation, rebalance simulation, notification tests
 - Factors: factor registry, evaluation, factor mining
 - Config: YAML config editor and strategy candidates
-- Agent Runs: create/browse strategy-iteration agent runs, inspect plans/traces/commands/feedback, regenerate approval templates
+- Agent Runs: create/browse strategy-iteration agent runs, choose sequential or meeting discussion mode, cap meeting rounds and roles per round, generate optional Codex task proposals, inspect plans/traces/commands/agent tasks/feedback, regenerate approval templates
 - System: logs, tasks, runtime information
 
 ## API Pattern
@@ -24,8 +24,11 @@ The Agent Runs page talks to `/api/agents`:
 - `GET /api/agents/runs/{run_id}`
 - `POST /api/agents/runs`
 - `POST /api/agents/runs/{run_id}/approval-template`
+- `POST /api/agents/runs/{run_id}/execute-safe`
+- `POST /api/agents/runs/{run_id}/execute-approved`
+- `POST /api/agents/runs/{run_id}/feedback/{command_id}`
 
-The dashboard intentionally does not expose command execution for protected agent commands. Training, backtest, WFV, data fetch/update, notifications, and trading-like actions remain approval-gated in the CLI layer.
+The dashboard can execute selected safe-local commands and selected approved commands. Training, backtest, WFV, data fetch/update, notifications, and trading-like actions remain approval-gated through command hashes and approval entries.
 
 ## Development
 

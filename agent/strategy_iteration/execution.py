@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import json
+import os
+import queue
+import re
 import shlex
 import subprocess
+import threading
+import time
 from datetime import datetime
 from pathlib import Path
-from typing import Iterable
+from typing import Callable, Iterable
 
 import yaml
 
@@ -24,6 +29,7 @@ EXPENSIVE_TAG = "expensive"
 NETWORK_TAG = "network"
 EXTERNAL_EFFECT_TAG = "external_effect"
 TRADING_LIKE_TAG = "trading_like"
+TEMPLATE_PLACEHOLDER_TAG = "template_placeholder"
 UNKNOWN_TAG = "unknown"
 
 PROTECTED_TAGS = {
@@ -31,6 +37,7 @@ PROTECTED_TAGS = {
     NETWORK_TAG,
     EXTERNAL_EFFECT_TAG,
     TRADING_LIKE_TAG,
+    TEMPLATE_PLACEHOLDER_TAG,
     UNKNOWN_TAG,
 }
 
@@ -65,6 +72,8 @@ def classify_command(command: str) -> tuple[list[str], bool, str, int]:
         tags.add(EXTERNAL_EFFECT_TAG)
     if any(token in lowered for token in ["run_daily.py", "run_scheduled_rebalance.py", "rebalance", "positions"]):
         tags.add(TRADING_LIKE_TAG)
+    if _has_template_placeholder(command):
+        tags.add(TEMPLATE_PLACEHOLDER_TAG)
 
     is_known_safe = (
         command.startswith("./.venv/bin/python -c ")
@@ -125,35 +134,63 @@ def build_command_plan(plan: StrategyIterationPlan) -> CommandExecutionPlan:
     )
 
 
-def execute_safe_commands(command_plan: CommandExecutionPlan, *, root: Path | str = ".") -> CommandExecutionPlan:
+ProgressCallback = Callable[..., None]
+
+
+def execute_safe_commands(
+    command_plan: CommandExecutionPlan,
+    *,
+    root: Path | str = ".",
+    progress_callback: ProgressCallback | None = None,
+) -> CommandExecutionPlan:
     """Execute only approved-by-policy safe local commands and capture compact results."""
 
     root_path = Path(root)
     results: list[CommandExecutionResult] = []
-    for proposal in command_plan.commands:
+    total = len(command_plan.commands)
+    for index, proposal in enumerate(command_plan.commands, start=1):
+        _emit_progress(progress_callback, "command_start", proposal, index=index, total=total)
         if proposal.requires_approval:
-            results.append(
-                CommandExecutionResult(
-                    command_id=proposal.command_id,
-                    command=proposal.command,
-                    skipped=True,
-                    skip_reason=proposal.approval_reason or "Command requires approval.",
-                )
+            result = CommandExecutionResult(
+                command_id=proposal.command_id,
+                command=proposal.command,
+                skipped=True,
+                skip_reason=proposal.approval_reason or "Command requires approval.",
             )
+            results.append(result)
+            _emit_progress(progress_callback, "command_skipped", proposal, index=index, total=total, result=result)
+            continue
+        placeholder_reason = _unresolved_placeholder_reason(proposal)
+        if placeholder_reason:
+            result = CommandExecutionResult(
+                command_id=proposal.command_id,
+                command=proposal.command,
+                skipped=True,
+                skip_reason=placeholder_reason,
+            )
+            results.append(result)
+            _emit_progress(progress_callback, "command_skipped", proposal, index=index, total=total, result=result)
             continue
         if SAFE_LOCAL_TAG not in proposal.risk_tags:
-            results.append(
-                CommandExecutionResult(
-                    command_id=proposal.command_id,
-                    command=proposal.command,
-                    skipped=True,
-                    skip_reason="Command is not tagged safe_local.",
-                )
+            result = CommandExecutionResult(
+                command_id=proposal.command_id,
+                command=proposal.command,
+                skipped=True,
+                skip_reason="Command is not tagged safe_local.",
             )
+            results.append(result)
+            _emit_progress(progress_callback, "command_skipped", proposal, index=index, total=total, result=result)
             continue
 
-        result = _run_local_command(proposal, root_path)
+        result = _run_local_command(
+            proposal,
+            root_path,
+            progress_callback=progress_callback,
+            index=index,
+            total=total,
+        )
         results.append(result)
+        _emit_progress(progress_callback, "command_done", proposal, index=index, total=total, result=result)
 
     command_plan.results = results
     return command_plan
@@ -165,53 +202,126 @@ def execute_approved_commands(
     approval_file: Path | str,
     root: Path | str = ".",
     include_safe: bool = False,
+    progress_callback: ProgressCallback | None = None,
 ) -> CommandExecutionPlan:
     """Execute commands approved by file; optionally include safe-local commands."""
 
     approvals = load_approval_file(approval_file, expected_run_id=command_plan.run_id)
     root_path = Path(root)
     results: list[CommandExecutionResult] = []
-    for proposal in command_plan.commands:
+    total = len(command_plan.commands)
+    for index, proposal in enumerate(command_plan.commands, start=1):
+        _emit_progress(progress_callback, "command_start", proposal, index=index, total=total)
         approval = approvals.get(proposal.command_id)
+        placeholder_reason = _unresolved_placeholder_reason(proposal)
+        if placeholder_reason:
+            result = CommandExecutionResult(
+                command_id=proposal.command_id,
+                command=proposal.command,
+                skipped=True,
+                skip_reason=placeholder_reason,
+                approval_reason=approval.reason if approval else "",
+            )
+            results.append(result)
+            _emit_progress(progress_callback, "command_skipped", proposal, index=index, total=total, result=result)
+            continue
         if include_safe and not proposal.requires_approval and SAFE_LOCAL_TAG in proposal.risk_tags:
-            results.append(_run_local_command(proposal, root_path, approval_reason="safe_local via include_safe"))
+            result = _run_local_command(
+                proposal,
+                root_path,
+                approval_reason="safe_local via include_safe",
+                progress_callback=progress_callback,
+                index=index,
+                total=total,
+            )
+            results.append(result)
+            _emit_progress(progress_callback, "command_done", proposal, index=index, total=total, result=result)
             continue
         if not approval:
-            results.append(
-                CommandExecutionResult(
-                    command_id=proposal.command_id,
-                    command=proposal.command,
-                    skipped=True,
-                    skip_reason="No approval entry for command_id.",
-                )
+            result = CommandExecutionResult(
+                command_id=proposal.command_id,
+                command=proposal.command,
+                skipped=True,
+                skip_reason="No approval entry for command_id.",
             )
+            results.append(result)
+            _emit_progress(progress_callback, "command_skipped", proposal, index=index, total=total, result=result)
             continue
         if not approval.approved:
-            results.append(
-                CommandExecutionResult(
-                    command_id=proposal.command_id,
-                    command=proposal.command,
-                    skipped=True,
-                    skip_reason="Approval entry is present but approved=false.",
-                    approval_reason=approval.reason,
-                )
+            result = CommandExecutionResult(
+                command_id=proposal.command_id,
+                command=proposal.command,
+                skipped=True,
+                skip_reason="Approval entry is present but approved=false.",
+                approval_reason=approval.reason,
             )
+            results.append(result)
+            _emit_progress(progress_callback, "command_skipped", proposal, index=index, total=total, result=result)
             continue
         if approval.command_sha256 != proposal.command_sha256:
-            results.append(
-                CommandExecutionResult(
-                    command_id=proposal.command_id,
-                    command=proposal.command,
-                    skipped=True,
-                    skip_reason="Approval command_sha256 does not match the current command.",
-                    approval_reason=approval.reason,
-                )
+            result = CommandExecutionResult(
+                command_id=proposal.command_id,
+                command=proposal.command,
+                skipped=True,
+                skip_reason="Approval command_sha256 does not match the current command.",
+                approval_reason=approval.reason,
             )
+            results.append(result)
+            _emit_progress(progress_callback, "command_skipped", proposal, index=index, total=total, result=result)
             continue
-        results.append(_run_local_command(proposal, root_path, approval_reason=approval.reason))
+        result = _run_local_command(
+            proposal,
+            root_path,
+            approval_reason=approval.reason,
+            progress_callback=progress_callback,
+            index=index,
+            total=total,
+        )
+        results.append(result)
+        _emit_progress(progress_callback, "command_done", proposal, index=index, total=total, result=result)
 
     command_plan.results = results
     return command_plan
+
+
+def _emit_progress(
+    progress_callback: ProgressCallback | None,
+    stage: str,
+    proposal: CommandProposal,
+    *,
+    index: int,
+    total: int,
+    result: CommandExecutionResult | None = None,
+    **extra,
+) -> None:
+    if not progress_callback:
+        return
+    payload = {
+        "stage": stage,
+        "command_id": proposal.command_id,
+        "command": proposal.command,
+        "risk_tags": proposal.risk_tags,
+        "requires_approval": proposal.requires_approval,
+        "index": index,
+        "total": total,
+    }
+    if result:
+        payload.update(
+            {
+                "skipped": result.skipped,
+                "returncode": result.returncode,
+                "skip_reason": result.skip_reason,
+                "started_at": result.started_at,
+                "ended_at": result.ended_at,
+                "stdout_tail": result.stdout_tail,
+                "stderr_tail": result.stderr_tail,
+            }
+        )
+    payload.update(extra)
+    try:
+        progress_callback("progress", **payload)
+    except Exception:
+        pass
 
 
 def load_approval_file(path: Path | str, *, expected_run_id: str | None = None) -> dict[str, CommandApproval]:
@@ -257,6 +367,7 @@ def save_approval_template(command_plan: CommandExecutionPlan, run_dir: Path | s
             "Set approved: true only for commands you explicitly want to execute.",
             "Keep command_sha256 unchanged; a mismatch means the command changed after approval.",
             "Protected commands may be expensive, use network/cache, send notifications, or have trading-like semantics.",
+            "Commands containing placeholders like <candidate_model> must be edited into concrete commands before execution.",
         ],
         "approvals": [
             {
@@ -407,6 +518,19 @@ def _option_value(argv: list[str], option: str) -> str:
     return argv[index + 1]
 
 
+def _has_template_placeholder(command: str) -> bool:
+    return bool(re.search(r"<[A-Za-z0-9_.:/-]+>", command))
+
+
+def _unresolved_placeholder_reason(proposal: CommandProposal) -> str:
+    if _has_template_placeholder(proposal.command):
+        return (
+            "Command contains unresolved template placeholder(s), such as <candidate_model>. "
+            "Edit the command to concrete paths/values before execution."
+        )
+    return ""
+
+
 def _one_line(value: str, limit: int = 240) -> str:
     compact = " ".join((value or "").split())
     if len(compact) <= limit:
@@ -481,27 +605,96 @@ def _looks_like_command(value: str) -> bool:
     return value.startswith(prefixes)
 
 
-def _run_local_command(proposal: CommandProposal, root: Path, *, approval_reason: str = "") -> CommandExecutionResult:
+def _run_local_command(
+    proposal: CommandProposal,
+    root: Path,
+    *,
+    approval_reason: str = "",
+    progress_callback: ProgressCallback | None = None,
+    index: int = 1,
+    total: int = 1,
+) -> CommandExecutionResult:
     started = datetime.now().isoformat(timespec="seconds")
     try:
         argv = _safe_argv(proposal.command)
-        completed = subprocess.run(
+        process = subprocess.Popen(
             argv,
             cwd=root,
-            capture_output=True,
+            env={**os.environ, "PYTHONUNBUFFERED": "1"},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=proposal.timeout_seconds,
-            check=False,
+            bufsize=1,
         )
+        stdout_chunks: list[str] = []
+        stderr_chunks: list[str] = []
+        output_events: "queue.Queue[tuple[str, str]]" = queue.Queue()
+
+        def _reader(stream_name: str, pipe) -> None:
+            try:
+                for line in iter(pipe.readline, ""):
+                    output_events.put((stream_name, line))
+            finally:
+                try:
+                    pipe.close()
+                except Exception:
+                    pass
+
+        threads = [
+            threading.Thread(target=_reader, args=("stdout", process.stdout), daemon=True),
+            threading.Thread(target=_reader, args=("stderr", process.stderr), daemon=True),
+        ]
+        for thread in threads:
+            thread.start()
+
+        deadline = time.monotonic() + max(1, int(proposal.timeout_seconds or 120))
+        timed_out = False
+
+        while True:
+            _drain_output_events(
+                output_events,
+                proposal,
+                stdout_chunks,
+                stderr_chunks,
+                progress_callback=progress_callback,
+                index=index,
+                total=total,
+            )
+            if process.poll() is not None:
+                break
+            if time.monotonic() > deadline:
+                timed_out = True
+                process.kill()
+                break
+            time.sleep(0.1)
+
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=5)
+        for thread in threads:
+            thread.join(timeout=1)
+        _drain_output_events(
+            output_events,
+            proposal,
+            stdout_chunks,
+            stderr_chunks,
+            progress_callback=progress_callback,
+            index=index,
+            total=total,
+        )
+        if timed_out:
+            stderr_chunks.append(f"\nCommand timed out after {proposal.timeout_seconds} seconds.\n")
         return CommandExecutionResult(
             command_id=proposal.command_id,
             command=proposal.command,
             skipped=False,
-            returncode=completed.returncode,
+            returncode=124 if timed_out else process.returncode,
             started_at=started,
             ended_at=datetime.now().isoformat(timespec="seconds"),
-            stdout_tail=_tail(completed.stdout),
-            stderr_tail=_tail(completed.stderr),
+            stdout_tail=_tail("".join(stdout_chunks)),
+            stderr_tail=_tail("".join(stderr_chunks)),
             approval_reason=approval_reason,
         )
     except Exception as exc:  # pragma: no cover - defensive capture for command execution
@@ -514,6 +707,40 @@ def _run_local_command(proposal: CommandProposal, root: Path, *, approval_reason
             ended_at=datetime.now().isoformat(timespec="seconds"),
             stderr_tail=str(exc),
             approval_reason=approval_reason,
+        )
+
+
+def _drain_output_events(
+    output_events: "queue.Queue[tuple[str, str]]",
+    proposal: CommandProposal,
+    stdout_chunks: list[str],
+    stderr_chunks: list[str],
+    *,
+    progress_callback: ProgressCallback | None,
+    index: int,
+    total: int,
+) -> None:
+    while True:
+        try:
+            stream_name, line = output_events.get_nowait()
+        except queue.Empty:
+            return
+
+        if stream_name == "stderr":
+            stderr_chunks.append(line)
+        else:
+            stdout_chunks.append(line)
+
+        _emit_progress(
+            progress_callback,
+            "command_output",
+            proposal,
+            index=index,
+            total=total,
+            stream=stream_name,
+            line=_tail(line, limit=2000),
+            stdout_tail=_tail("".join(stdout_chunks), limit=2000),
+            stderr_tail=_tail("".join(stderr_chunks), limit=2000),
         )
 
 
