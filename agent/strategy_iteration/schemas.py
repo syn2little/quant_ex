@@ -89,6 +89,9 @@ class ChairDecision:
     decision: str = "continue"
     final_summary: str = ""
     confidence: float = 0.5
+    coverage: Dict[str, bool] = field(default_factory=dict)
+    missing_requirements: List[str] = field(default_factory=list)
+    blocked_reason: str = ""
 
     @classmethod
     def from_dict(cls, turn_index: int, payload: Dict[str, Any]) -> "ChairDecision":
@@ -106,6 +109,9 @@ class ChairDecision:
             decision=str(payload.get("decision") or "continue"),
             final_summary=str(payload.get("final_summary") or payload.get("summary") or ""),
             confidence=float(payload.get("confidence") or 0.5),
+            coverage=dict(payload.get("coverage") or {}),
+            missing_requirements=_clean_list(payload.get("missing_requirements")),
+            blocked_reason=str(payload.get("blocked_reason") or ""),
         )
 
     def to_dict(self) -> Dict[str, Any]:
@@ -147,6 +153,7 @@ class StrategyProjectContext:
     memory_context: List[str] = field(default_factory=list)
     repo_capabilities: List[str] = field(default_factory=list)
     constraints: List[str] = field(default_factory=list)
+    research_constraints: Dict[str, Any] = field(default_factory=dict)
     source_projects: Dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -174,6 +181,7 @@ class StrategyIterationPlan:
     synthesis: str
     next_actions: List[str] = field(default_factory=list)
     discussion_decisions: List[ChairDecision] = field(default_factory=list)
+    research_constraints: Dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         payload = asdict(self)
@@ -210,6 +218,25 @@ class StrategyIterationPlan:
                 )
                 if decision.final_summary:
                     lines.append(f"- Final summary: {decision.final_summary}")
+                if decision.missing_requirements:
+                    lines.append(f"- Missing requirements: {', '.join(decision.missing_requirements)}")
+                if decision.blocked_reason:
+                    lines.append(f"- Blocked reason: {decision.blocked_reason}")
+        if self.research_constraints:
+            metric_policy = self.research_constraints.get("metric_policy") or {}
+            lines.extend(
+                [
+                    "",
+                    "## Research Constraints",
+                    f"- Default controls: {', '.join(self.research_constraints.get('default_controls') or []) or 'none'}",
+                    f"- Rank metric: {metric_policy.get('rank_metric') or 'none'}",
+                    f"- Promotion evidence: {metric_policy.get('promotion_evidence') or 'none'}",
+                    "- Known traps:",
+                    *[f"  - {item}" for item in self.research_constraints.get("known_traps") or []],
+                    "- Required plan fields:",
+                    *[f"  - {item}" for item in self.research_constraints.get("required_plan_fields") or []],
+                ]
+            )
         for report in self.role_reports:
             lines.extend(
                 [

@@ -7,12 +7,14 @@ from pydantic import BaseModel
 from web.api.services.agent_service import (
     create_agent_run,
     delete_agent_run,
+    execute_agent_run_tasks,
     execute_agent_run_approved,
     execute_agent_run_safe,
     generate_agent_run_feedback,
     get_agent_run,
     list_agent_runs,
     regenerate_approval_template,
+    update_agent_task_approval,
     update_command_approval,
 )
 from web.api.services.task_manager import get_task_manager
@@ -43,6 +45,12 @@ class ApprovalUpdateRequest(BaseModel):
     reason: str = ""
 
 
+class AgentTaskApprovalUpdateRequest(BaseModel):
+    approved: bool
+    approved_by: str = "web"
+    reason: str = ""
+
+
 class ExecuteCommandsRequest(BaseModel):
     command_ids: list[str] | None = None
     skip_successful: bool = True
@@ -52,6 +60,13 @@ class ExecuteApprovedRequest(BaseModel):
     include_safe: bool = False
     command_ids: list[str] | None = None
     skip_successful: bool = True
+
+
+class ExecuteAgentTasksRequest(BaseModel):
+    task_ids: list[str] | None = None
+    skip_successful: bool = True
+    worktree_base: str = ".agent_worktrees"
+    codex_bin: str = "codex"
 
 
 class GenerateFeedbackRequest(BaseModel):
@@ -121,6 +136,21 @@ def update_approval(run_id: str, command_id: str, request: ApprovalUpdateRequest
     )
 
 
+@router.post("/runs/{run_id}/agent-task-approvals/{task_id}")
+def update_agent_task_approval_endpoint(
+    run_id: str,
+    task_id: str,
+    request: AgentTaskApprovalUpdateRequest,
+) -> dict:
+    return update_agent_task_approval(
+        run_id,
+        task_id,
+        approved=request.approved,
+        approved_by=request.approved_by,
+        reason=request.reason,
+    )
+
+
 @router.post("/runs/{run_id}/execute-safe")
 async def execute_safe(run_id: str, request: ExecuteCommandsRequest | None = None) -> dict:
     task_id = await get_task_manager().start_sync_task(
@@ -148,6 +178,23 @@ async def execute_approved(run_id: str, request: ExecuteApprovedRequest) -> dict
         include_safe=request.include_safe,
         command_ids=request.command_ids,
         skip_successful=request.skip_successful,
+    )
+    return {"task_id": task_id, "run_id": run_id}
+
+
+@router.post("/runs/{run_id}/execute-agent-tasks")
+async def execute_agent_tasks(run_id: str, request: ExecuteAgentTasksRequest) -> dict:
+    task_id = await get_task_manager().start_sync_task(
+        "agent_execute_tasks",
+        execute_agent_run_tasks,
+        run_id,
+        page_key="agents",
+        action_key="agents.execute_tasks",
+        progress_callback_arg="progress_callback",
+        task_ids=request.task_ids,
+        skip_successful=request.skip_successful,
+        worktree_base=request.worktree_base,
+        codex_bin=request.codex_bin,
     )
     return {"task_id": task_id, "run_id": run_id}
 

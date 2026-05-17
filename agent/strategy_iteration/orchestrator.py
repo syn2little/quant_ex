@@ -168,6 +168,7 @@ class StrategyIterationOrchestrator:
                 "Run the validation ladder from cheapest to most expensive.",
             ],
             discussion_decisions=runner.chair_decisions,
+            research_constraints=context.research_constraints,
         )
         self._emit_progress(
             progress_callback,

@@ -9,7 +9,7 @@ import { useSSE } from "../hooks/useSSE";
 import type { SSEEvent } from "../hooks/useSSE";
 import type { AgentRunCreateRequest, AgentRunDetail, AgentRunSummary } from "../api/types";
 
-type AgentTabKey = "plan" | "commands" | "summary" | "feedback" | "approval" | "raw";
+type AgentTabKey = "plan" | "commands" | "agentTasks" | "summary" | "feedback" | "approval" | "raw";
 type DiscussionMode = "sequential" | "meeting";
 type AgentMode = "readonly" | "patch" | "danger-full-access";
 type AgentCommand = {
@@ -43,6 +43,31 @@ type AgentCommandResult = {
   skip_reason?: string;
   approval_reason?: string;
 };
+type AgentTaskProposal = {
+  task_id: string;
+  title: string;
+  provider?: string;
+  mode?: string;
+  source?: string;
+  target_files?: string[];
+  allowed_paths?: string[];
+  requires_approval?: boolean;
+};
+type AgentTaskApprovalEntry = {
+  task_id: string;
+  approved?: boolean;
+  approved_by?: string;
+  reason?: string;
+};
+type AgentTaskResult = {
+  task_id: string;
+  skipped?: boolean;
+  returncode?: number | null;
+  result_path?: string;
+  diff_path?: string;
+  skip_reason?: string;
+  warning?: string;
+};
 type CommandLogLine = {
   stream: "stdout" | "stderr";
   line: string;
@@ -59,6 +84,7 @@ type CommandLiveOutput = {
 const DETAIL_TABS: { key: AgentTabKey; labelKey: string }[] = [
   { key: "plan", labelKey: "agentRuns.plan" },
   { key: "commands", labelKey: "agentRuns.commands" },
+  { key: "agentTasks", labelKey: "agentRuns.agentTasks" },
   { key: "summary", labelKey: "agentRuns.summary" },
   { key: "feedback", labelKey: "agentRuns.feedback" },
   { key: "approval", labelKey: "agentRuns.approval" },
@@ -68,6 +94,7 @@ const DETAIL_TABS: { key: AgentTabKey; labelKey: string }[] = [
 const ARTIFACT_KEYS = [
   { key: "plan", flag: "has_plan", fields: ["plan.md", "plan_markdown", "plan", "plan_path"] },
   { key: "cmd", flag: "has_commands", fields: ["commands.md", "commands.json", "commands_markdown", "commands", "commands_path"] },
+  { key: "task", flag: "has_agent_tasks", fields: ["agent_tasks.md", "agent_tasks.json", "agent_tasks", "agent_tasks_path"] },
   { key: "sum", flag: "has_execution_summary", fields: ["execution_summary.md", "execution_summary", "summary", "execution_summary_path"] },
   { key: "fb", flag: "has_feedback", fields: ["feedback.md", "feedback.json", "feedback", "feedback_path"] },
   { key: "tpl", flag: "has_approval_template", fields: ["approval_template.yaml", "approval_template", "approval", "approval_template_path"] },
@@ -122,6 +149,21 @@ function commandList(run: AgentRunDetail | null): AgentCommand[] {
   return Array.isArray(commands) ? (commands as AgentCommand[]) : [];
 }
 
+function agentTaskList(run: AgentRunDetail | null): AgentTaskProposal[] {
+  const payload = artifactValue(run, "agent_tasks.json");
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
+  const tasks = (payload as Record<string, unknown>).tasks;
+  return Array.isArray(tasks) ? (tasks as AgentTaskProposal[]) : [];
+}
+
+function agentTaskResultMap(run: AgentRunDetail | null) {
+  const payload = artifactValue(run, "agent_tasks.json");
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return new Map<string, AgentTaskResult>();
+  const results = (payload as Record<string, unknown>).results;
+  if (!Array.isArray(results)) return new Map<string, AgentTaskResult>();
+  return new Map((results as AgentTaskResult[]).map((result) => [result.task_id, result]));
+}
+
 function commandResultMap(run: AgentRunDetail | null) {
   const commandsPayload = artifactValue(run, "commands.json");
   if (!commandsPayload || typeof commandsPayload !== "object" || Array.isArray(commandsPayload)) return new Map<string, AgentCommandResult>();
@@ -133,6 +175,11 @@ function commandResultMap(run: AgentRunDetail | null) {
 function approvalMap(run: AgentRunDetail | null) {
   const entries = (run?.approval_entries ?? []) as ApprovalEntry[];
   return new Map(entries.map((entry) => [entry.command_id, entry]));
+}
+
+function agentTaskApprovalMap(run: AgentRunDetail | null) {
+  const entries = (run?.agent_approval_entries ?? []) as AgentTaskApprovalEntry[];
+  return new Map(entries.map((entry) => [entry.task_id, entry]));
 }
 
 function feedbackCandidateMap(run: AgentRunDetail | null) {
@@ -630,6 +677,7 @@ export function AgentRunsPage() {
   const [approvalBusyId, setApprovalBusyId] = useState<string | null>(null);
   const [deleteBusyRunId, setDeleteBusyRunId] = useState<string | null>(null);
   const [selectedCommandIds, setSelectedCommandIds] = useState<Set<string>>(new Set());
+  const [selectedAgentTaskIds, setSelectedAgentTaskIds] = useState<Set<string>>(new Set());
   const [expandedCommandLogs, setExpandedCommandLogs] = useState<Set<string>>(new Set());
   const [regeneratingTemplate, setRegeneratingTemplate] = useState(false);
   const createTask = useSSE(createTaskId);
@@ -750,6 +798,7 @@ export function AgentRunsPage() {
   const currentText = useMemo(() => {
     if (activeTab === "plan") return firstText(detail, ["plan.md", "plan_markdown", "plan"]);
     if (activeTab === "commands") return firstText(detail, ["commands.md", "commands_markdown", "commands"]);
+    if (activeTab === "agentTasks") return firstText(detail, ["agent_tasks.md", "agent_tasks"]) || coerceText(artifactValue(detail, "agent_tasks.json"));
     if (activeTab === "summary") return firstText(detail, ["execution_summary.md", "execution_summary", "summary"]);
     if (activeTab === "feedback") return firstText(detail, ["feedback.md", "feedback"]) || coerceText(artifactValue(detail, "feedback.json"));
     if (activeTab === "approval") return firstText(detail, ["approval_template.yaml", "approval_template", "approval"]);
@@ -759,7 +808,10 @@ export function AgentRunsPage() {
   const selectedDecision = (detail?.feedback_decision ?? selectedSummary?.feedback_decision) as string | undefined;
   const commands = useMemo(() => commandList(detail), [detail]);
   const commandResults = useMemo(() => commandResultMap(detail), [detail]);
+  const agentTasks = useMemo(() => agentTaskList(detail), [detail]);
+  const agentTaskResults = useMemo(() => agentTaskResultMap(detail), [detail]);
   const approvals = useMemo(() => approvalMap(detail), [detail]);
+  const agentTaskApprovals = useMemo(() => agentTaskApprovalMap(detail), [detail]);
   const feedbackCandidates = useMemo(() => feedbackCandidateMap(detail), [detail]);
   const selectedCommands = useMemo(
     () => commands.filter((command) => selectedCommandIds.has(command.command_id)),
@@ -769,6 +821,14 @@ export function AgentRunsPage() {
     () => selectedCommands.map((command) => command.command_id),
     [selectedCommands]
   );
+  const selectedAgentTasks = useMemo(
+    () => agentTasks.filter((task) => selectedAgentTaskIds.has(task.task_id)),
+    [agentTasks, selectedAgentTaskIds]
+  );
+  const selectedAgentTaskIdList = useMemo(
+    () => selectedAgentTasks.map((task) => task.task_id),
+    [selectedAgentTasks]
+  );
   const successfulCommandIds = useMemo(
     () =>
       new Set(
@@ -777,6 +837,22 @@ export function AgentRunsPage() {
           .map((result) => result.command_id)
       ),
     [commandResults]
+  );
+  const successfulAgentTaskIds = useMemo(
+    () =>
+      new Set(
+        [...agentTaskResults.values()]
+          .filter((result) => !result.skipped && result.returncode === 0)
+          .map((result) => result.task_id)
+      ),
+    [agentTaskResults]
+  );
+  const selectedApprovedAgentTaskIds = useMemo(
+    () =>
+      selectedAgentTasks
+        .filter((task) => agentTaskApprovals.get(task.task_id)?.approved && !successfulAgentTaskIds.has(task.task_id))
+        .map((task) => task.task_id),
+    [agentTaskApprovals, selectedAgentTasks, successfulAgentTaskIds]
   );
   const selectedSafeCommandIds = useMemo(
     () =>
@@ -864,6 +940,7 @@ export function AgentRunsPage() {
 
   useEffect(() => {
     setSelectedCommandIds(new Set());
+    setSelectedAgentTaskIds(new Set());
   }, [selectedRunId]);
 
   useEffect(() => {
@@ -873,6 +950,14 @@ export function AgentRunsPage() {
       return next.size === current.size ? current : next;
     });
   }, [commands]);
+
+  useEffect(() => {
+    setSelectedAgentTaskIds((current) => {
+      const valid = new Set(agentTasks.map((task) => task.task_id));
+      const next = new Set([...current].filter((taskId) => valid.has(taskId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [agentTasks]);
 
   const handleCreate = () => {
     if (!objective.trim()) return;
@@ -956,6 +1041,20 @@ export function AgentRunsPage() {
       .finally(() => setApprovalBusyId(null));
   };
 
+  const handleAgentTaskApprovalUpdate = (taskId: string, approved: boolean) => {
+    if (!selectedRunId) return;
+    setApprovalBusyId(taskId);
+    setError(null);
+    post(`/agents/runs/${encodeURIComponent(selectedRunId)}/agent-task-approvals/${encodeURIComponent(taskId)}`, {
+      approved,
+      approved_by: "web",
+      reason: approved ? "Approved from dashboard" : "Revoked from dashboard",
+    })
+      .then(() => refreshSelectedRun(selectedRunId))
+      .catch((err: Error) => setError(err.message))
+      .finally(() => setApprovalBusyId(null));
+  };
+
   const handleSelectCommand = (commandId: string, checked: boolean) => {
     setSelectedCommandIds((current) => {
       const next = new Set(current);
@@ -971,6 +1070,23 @@ export function AgentRunsPage() {
 
   const handleClearCommandSelection = () => {
     setSelectedCommandIds(new Set());
+  };
+
+  const handleSelectAgentTask = (taskId: string, checked: boolean) => {
+    setSelectedAgentTaskIds((current) => {
+      const next = new Set(current);
+      if (checked) next.add(taskId);
+      else next.delete(taskId);
+      return next;
+    });
+  };
+
+  const handleSelectAllAgentTasks = () => {
+    setSelectedAgentTaskIds(new Set(agentTasks.map((task) => task.task_id)));
+  };
+
+  const handleClearAgentTaskSelection = () => {
+    setSelectedAgentTaskIds(new Set());
   };
 
   const toggleCommandLog = (commandId: string) => {
@@ -1008,6 +1124,17 @@ export function AgentRunsPage() {
       include_safe: includeSafe,
       command_ids: commandIds,
       skip_successful: !rerunSuccessful,
+    })
+      .then((payload) => setExecutionTaskId(payload.task_id))
+      .catch((err: Error) => setError(err.message));
+  };
+
+  const handleExecuteAgentTasks = () => {
+    if (!selectedRunId || selectedApprovedAgentTaskIds.length === 0) return;
+    setError(null);
+    post<{ task_id: string; run_id: string }>(`/agents/runs/${encodeURIComponent(selectedRunId)}/execute-agent-tasks`, {
+      task_ids: selectedApprovedAgentTaskIds,
+      skip_successful: true,
     })
       .then((payload) => setExecutionTaskId(payload.task_id))
       .catch((err: Error) => setError(err.message));
@@ -1572,6 +1699,102 @@ export function AgentRunsPage() {
                     })}
                   </div>
                 )}
+
+                <div className="border-t border-terminal-border pt-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="font-mono text-xs text-terminal-text-dim">
+                      {t("agentRuns.selectedAgentTasks", { count: selectedAgentTaskIdList.length, total: agentTasks.length })}
+                    </span>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        onClick={handleSelectAllAgentTasks}
+                        disabled={agentTasks.length === 0 || Boolean(executionTaskId)}
+                        className="rounded-sm border border-terminal-border px-2 py-1 font-mono text-[11px] text-terminal-text-dim transition-colors hover:border-terminal-cyan hover:text-terminal-cyan disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {t("agentRuns.selectAll")}
+                      </button>
+                      <button
+                        onClick={handleClearAgentTaskSelection}
+                        disabled={selectedAgentTaskIdList.length === 0 || Boolean(executionTaskId)}
+                        className="rounded-sm border border-terminal-border px-2 py-1 font-mono text-[11px] text-terminal-text-dim transition-colors hover:border-terminal-red hover:text-terminal-red disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {t("agentRuns.clearSelection")}
+                      </button>
+                      <button
+                        onClick={handleExecuteAgentTasks}
+                        disabled={Boolean(executionTaskId) || !detail?.has_agent_approval_template || selectedApprovedAgentTaskIds.length === 0}
+                        className="rounded-sm border border-terminal-amber px-2 py-1 font-mono text-[11px] text-terminal-amber transition-colors hover:bg-terminal-amber-glow disabled:cursor-not-allowed disabled:opacity-40"
+                      >
+                        {t("agentRuns.executeSelectedAgentTasks")}
+                      </button>
+                    </div>
+                  </div>
+                  {agentTasks.length === 0 ? (
+                    <p className="mt-2 font-mono text-xs text-terminal-text-dim">{t("agentRuns.noAgentTasks")}</p>
+                  ) : (
+                    <div className="mt-2 max-h-56 space-y-2 overflow-auto pr-1">
+                      {agentTasks.map((task) => {
+                        const approval = agentTaskApprovals.get(task.task_id);
+                        const result = agentTaskResults.get(task.task_id);
+                        const approved = Boolean(approval?.approved);
+                        const selected = selectedAgentTaskIds.has(task.task_id);
+                        const succeeded = Boolean(result && !result.skipped && result.returncode === 0);
+                        const failed = Boolean(result && !result.skipped && result.returncode != null && result.returncode !== 0);
+                        return (
+                          <div
+                            key={task.task_id}
+                            className={`rounded-sm border px-3 py-2 ${
+                              selected ? "border-terminal-green bg-terminal-green-glow" : "border-terminal-border bg-terminal-bg"
+                            }`}
+                          >
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex min-w-0 items-center gap-2">
+                                <label className="flex shrink-0 items-center gap-2 font-mono text-[11px] text-terminal-text-dim">
+                                  <input
+                                    type="checkbox"
+                                    checked={selected}
+                                    disabled={Boolean(executionTaskId)}
+                                    onChange={(event) => handleSelectAgentTask(task.task_id, event.target.checked)}
+                                    className="h-3.5 w-3.5 accent-terminal-green"
+                                  />
+                                  {t("agentRuns.select")}
+                                </label>
+                                <span className="font-mono text-xs text-terminal-cyan">{task.task_id}</span>
+                                <Badge variant="info">{task.mode ?? "readonly"}</Badge>
+                                {approved && <Badge variant="success">{t("agentRuns.approved")}</Badge>}
+                                {succeeded && <Badge variant="success">{t("agentRuns.executed")}</Badge>}
+                                {failed && <Badge variant="error">{t("agentRuns.failed")}</Badge>}
+                                {result?.skipped && <Badge variant="info">{t("agentRuns.skipped")}</Badge>}
+                              </div>
+                              <button
+                                onClick={() => handleAgentTaskApprovalUpdate(task.task_id, !approved)}
+                                disabled={approvalBusyId === task.task_id || Boolean(executionTaskId)}
+                                className="rounded-sm border border-terminal-border px-2 py-1 font-mono text-[11px] text-terminal-text-dim transition-colors hover:border-terminal-green hover:text-terminal-green disabled:cursor-not-allowed disabled:opacity-40"
+                              >
+                                {approved ? t("agentRuns.revokeApproval") : t("agentRuns.approve")}
+                              </button>
+                            </div>
+                            <p className="mt-2 font-mono text-[11px] text-terminal-text">{task.title}</p>
+                            <p className="mt-1 overflow-x-auto whitespace-nowrap font-mono text-[11px] text-terminal-text-dim">
+                              {task.source || task.provider || "codex"}
+                            </p>
+                            {result && (
+                              <p className="mt-1 overflow-x-auto whitespace-nowrap font-mono text-[11px] text-terminal-text-dim">
+                                {t("agentRuns.lastResult")}:{" "}
+                                {result.skipped
+                                  ? result.skip_reason || t("agentRuns.skipped")
+                                  : result.returncode === 0
+                                    ? t("agentRuns.executed")
+                                    : `${t("agentRuns.failed")} (${result.returncode ?? "?"})`}
+                                {result.diff_path ? ` | diff: ${result.diff_path}` : ""}
+                              </p>
+                            )}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+                </div>
               </div>
             </Card>
           )}

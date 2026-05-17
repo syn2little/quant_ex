@@ -26,6 +26,8 @@ DEFAULT_CONSTRAINTS = [
     "Keep each experiment comparable: same benchmark, rank_metric, deal_price, cost and slippage assumptions unless explicitly varied.",
     "Treat same-model backtest uplift as a filter, not promotion evidence.",
     "Prefer disabled-by-default modular additions over invasive rewrites.",
+    "Default research controls are adaptive_baseline_wf and adaptive_dd20_wf unless the objective explicitly narrows scope.",
+    "Do not rerun historically refuted arms without a smaller orthogonal ablation and a stated reason.",
 ]
 
 SOURCE_PROJECT_SUMMARY = {
@@ -138,6 +140,86 @@ def _load_memory_tail(path: Path, limit: int = 3) -> List[str]:
     return chunks[-limit:]
 
 
+def build_research_constraints(
+    *,
+    candidate_summary: Dict[str, Any],
+    recent_strategy_rows: List[Dict[str, Any]],
+    recent_system_rows: List[Dict[str, Any]],
+    memory_context: List[str],
+) -> Dict[str, Any]:
+    """Derive hard planning constraints from durable research history."""
+
+    selected = candidate_summary.get("selected", {}) if candidate_summary else {}
+    rejected_recent = (candidate_summary.get("research", {}) or {}).get("rejected_recent", {})
+    rejected_rows = [
+        row
+        for row in recent_strategy_rows
+        if str(row.get("decision") or "").lower() in {"do_not_promote", "downgrade", "reject", "refuted"}
+    ]
+    compare_rows = [
+        row
+        for row in recent_strategy_rows
+        if str(row.get("decision") or "").lower() in {"compare_next", "keep"}
+    ]
+    do_not_repeat = []
+    for key, item in rejected_recent.items():
+        reason = item.get("reason") if isinstance(item, dict) else ""
+        do_not_repeat.append({"id": key, "reason": reason})
+    for row in rejected_rows[-8:]:
+        do_not_repeat.append(
+            {
+                "id": row.get("strategy_id") or row.get("candidate") or row.get("run_id") or "",
+                "reason": row.get("notes") or row.get("conclusion") or "",
+            }
+        )
+
+    return {
+        "default_controls": [
+            "adaptive_baseline_wf",
+            "adaptive_dd20_wf",
+        ],
+        "selected_candidates": selected,
+        "metric_policy": {
+            "rank_metric": "information_ratio",
+            "promotion_evidence": "walk_forward_validation",
+            "same_model_backtest_role": "cheap filter only",
+            "required_comparability": ["benchmark", "rank_metric", "deal_price", "cost", "slippage"],
+        },
+        "stable_reference_configs": [
+            "config/daily_csi1000.yaml",
+            "config/csi1000_adaptive_overlay_20.yaml",
+        ],
+        "known_traps": [
+            "config/daily_csi1000.yaml currently has market.name resolving to csi300; strict csi1000 training must verify overrides and model _meta.json.",
+            "SVS overlay is a regime-sensitive amplifier, not default stable alpha.",
+            "Same-model 2024-2026 uplifts have repeatedly failed full WFV.",
+            "Fundamental top70 and strict csi1000 full-agent retrain are refuted paths unless redesigned as smaller ablations.",
+        ],
+        "do_not_repeat": [item for item in do_not_repeat if item.get("id")],
+        "promising_threads": [
+            {
+                "id": row.get("strategy_id") or row.get("candidate") or row.get("run_id") or "",
+                "decision": row.get("decision"),
+                "notes": row.get("notes") or row.get("conclusion") or "",
+            }
+            for row in compare_rows[-6:]
+        ],
+        "latest_system_iteration": recent_system_rows[-1] if recent_system_rows else {},
+        "latest_agent_memory": memory_context[-1] if memory_context else "",
+        "required_plan_fields": [
+            "control arm",
+            "benchmark",
+            "rank_metric",
+            "deal_price",
+            "cost/slippage",
+            "train universe",
+            "eval universe",
+            "topk/n_drop/hold_thresh",
+            "WFV promotion gate",
+        ],
+    }
+
+
 def build_project_context(
     objective: str,
     *,
@@ -177,5 +259,11 @@ def build_project_context(
     context.memory_context = _load_memory_tail(root / "docs" / "strategy_log" / "agent_memory.md")
     context.repo_capabilities = list(DEFAULT_REPO_CAPABILITIES)
     context.constraints = list(DEFAULT_CONSTRAINTS)
+    context.research_constraints = build_research_constraints(
+        candidate_summary=context.candidate_summary,
+        recent_strategy_rows=context.recent_strategy_rows,
+        recent_system_rows=context.recent_system_rows,
+        memory_context=context.memory_context,
+    )
     context.source_projects = SOURCE_PROJECT_SUMMARY
     return context

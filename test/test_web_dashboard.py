@@ -476,6 +476,56 @@ def test_agent_approval_update_and_execute_safe_task(monkeypatch, tmp_path):
     assert task_calls[-1]["kwargs"]["action_key"] == "agents.feedback"
 
 
+def test_agent_task_approval_update_and_execute(monkeypatch, tmp_path):
+    runs_dir = tmp_path / "agent_runs"
+    monkeypatch.setattr(agent_service, "AGENT_RUNS_DIR", runs_dir)
+    monkeypatch.setattr(agent_service, "PROJECT_ROOT", tmp_path)
+    task_calls = []
+
+    class FakeTaskManager:
+        async def start_sync_task(self, task_type, fn, *args, **kwargs):
+            task_calls.append({"task_type": task_type, "args": args, "kwargs": kwargs})
+            return "agent_task_exec"
+
+    monkeypatch.setattr(agents_router, "get_task_manager", lambda: FakeTaskManager())
+
+    client = TestClient(create_app())
+    create_response = client.post(
+        "/api/agents/runs",
+        json={
+            "objective": "agent task approval update",
+            "run_id": "agent_task_web",
+            "use_agent": True,
+            "agent_max_tasks": 1,
+        },
+    )
+    assert create_response.status_code == 200
+    detail = client.get("/api/agents/runs/agent_task_web").json()
+    task_id = detail["artifacts"]["agent_tasks.json"]["tasks"][0]["task_id"]
+
+    approve_response = client.post(
+        f"/api/agents/runs/agent_task_web/agent-task-approvals/{task_id}",
+        json={"approved": True, "approved_by": "test", "reason": "unit approval"},
+    )
+    assert approve_response.status_code == 200
+    assert any(
+        item["task_id"] == task_id and item["approved"] is True
+        for item in approve_response.json()["agent_approval_entries"]
+    )
+
+    execute_response = client.post(
+        "/api/agents/runs/agent_task_web/execute-agent-tasks",
+        json={"task_ids": [task_id]},
+    )
+    assert execute_response.status_code == 200
+    assert task_calls[-1]["task_type"] == "agent_execute_tasks"
+    assert task_calls[-1]["args"] == ("agent_task_web",)
+    assert task_calls[-1]["kwargs"]["task_ids"] == [task_id]
+    assert task_calls[-1]["kwargs"]["skip_successful"] is True
+    assert task_calls[-1]["kwargs"]["page_key"] == "agents"
+    assert task_calls[-1]["kwargs"]["action_key"] == "agents.execute_tasks"
+
+
 def test_agent_execute_safe_skips_successful_commands_by_default(monkeypatch, tmp_path):
     runs_dir = tmp_path / "agent_runs"
     run_dir = runs_dir / "skip_success"

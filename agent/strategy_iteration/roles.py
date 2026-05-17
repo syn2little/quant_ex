@@ -30,6 +30,21 @@ def _fallback_focus(role_name: str, reports: List[RoleReport]) -> str:
     return "Contribute only the perspective needed for the current objective."
 
 
+ROLE_COVERAGE = {
+    "data_factor_analyst": "data_factor",
+    "model_analyst": "model",
+    "backtest_analyst": "validation",
+    "execution_analyst": "execution",
+    "bear_researcher": "risk",
+    "conservative_risk_reviewer": "risk",
+    "neutral_risk_reviewer": "risk",
+    "experiment_designer": "experiment",
+    "research_manager": "decision",
+    "research_portfolio_manager": "decision",
+}
+REQUIRED_MEETING_COVERAGE = ["data_factor", "validation", "risk", "experiment", "decision"]
+
+
 DEFAULT_ROLES: List[AgentRole] = [
     AgentRole(
         name="data_factor_analyst",
@@ -301,6 +316,10 @@ class RoleRunner:
                 final_summary="Meeting stopped at the configured max_turns; use the collected reports for synthesis.",
                 confidence=0.6,
             )
+            self._attach_meeting_quality(final, reports)
+            if final.missing_requirements:
+                final.decision = "blocked"
+                final.blocked_reason = "Meeting ended before satisfying the quality gate."
             self.chair_decisions.append(final)
             self.discussion_trace.append(
                 {
@@ -455,12 +474,20 @@ class RoleRunner:
         allow_repeat_roles: bool,
         max_roles_per_turn: int,
     ) -> ChairDecision:
+        self._attach_meeting_quality(decision, reports)
         decision.action = decision.action if decision.action in {"call_role", "final"} else "call_role"
         if decision.action == "final" and len(reports) < min_turns:
             decision.action = "call_role"
             decision.rationale = (decision.rationale + " " if decision.rationale else "") + (
                 "Minimum meeting turns have not been reached."
             )
+        if decision.action == "final" and decision.missing_requirements:
+            decision.action = "call_role"
+            decision.decision = "blocked"
+            decision.blocked_reason = "Meeting quality gate requires additional coverage before final synthesis."
+            decision.rationale = (decision.rationale + " " if decision.rationale else "") + decision.blocked_reason
+            decision.next_role = ""
+            decision.next_roles = []
         roles = self._roles_for_decision(
             decision,
             called_roles=called_roles,
@@ -486,8 +513,9 @@ class RoleRunner:
         called_roles: set[str],
         max_roles_per_turn: int,
     ) -> ChairDecision:
-        if len(reports) >= min_turns and "research_portfolio_manager" in called_roles:
-            return ChairDecision(
+        gate = self._meeting_quality_gate(reports)
+        if len(reports) >= min_turns and "research_portfolio_manager" in called_roles and not gate["missing"]:
+            decision = ChairDecision(
                 turn_index=turn_index,
                 action="final",
                 decision="continue",
@@ -495,8 +523,10 @@ class RoleRunner:
                 final_summary="Offline fallback meeting completed with enough analyst, adversarial, and decision context.",
                 confidence=0.7,
             )
+            self._attach_meeting_quality(decision, reports)
+            return decision
         roles = self._fallback_next_roles(called_roles, reports, limit=max_roles_per_turn)
-        return ChairDecision(
+        decision = ChairDecision(
             turn_index=turn_index,
             action="call_role",
             next_role=roles[0].name if roles else "",
@@ -506,6 +536,8 @@ class RoleRunner:
             decision="continue",
             confidence=0.65,
         )
+        self._attach_meeting_quality(decision, reports)
+        return decision
 
     def _roles_for_decision(
         self,
@@ -538,6 +570,19 @@ class RoleRunner:
         return fallback_roles
 
     def _fallback_next_role(self, called_roles: set[str], reports: List[RoleReport]) -> Optional[AgentRole]:
+        missing = self._meeting_quality_gate(reports)["missing"]
+        missing_preferred = {
+            "data_factor": ["data_factor_analyst"],
+            "validation": ["backtest_analyst"],
+            "risk": ["bear_researcher", "conservative_risk_reviewer", "neutral_risk_reviewer"],
+            "experiment": ["experiment_designer"],
+            "decision": ["research_portfolio_manager", "research_manager"],
+        }
+        for requirement in missing:
+            for name in missing_preferred.get(requirement, []):
+                role = self._role_by_name(name)
+                if role and role.name not in called_roles:
+                    return role
         preferred = [
             "data_factor_analyst",
             "backtest_analyst",
@@ -552,6 +597,25 @@ class RoleRunner:
             if role and role.name not in called_roles:
                 return role
         return next((role for role in self.roles if role.name not in called_roles), None)
+
+    @staticmethod
+    def _meeting_quality_gate(reports: List[RoleReport]) -> Dict[str, Any]:
+        covered = {key: False for key in REQUIRED_MEETING_COVERAGE}
+        covered["model"] = False
+        covered["execution"] = False
+        for report in reports:
+            key = ROLE_COVERAGE.get(report.role)
+            if key:
+                covered[key] = True
+        missing = [key for key in REQUIRED_MEETING_COVERAGE if not covered.get(key)]
+        return {"coverage": covered, "missing": missing}
+
+    def _attach_meeting_quality(self, decision: ChairDecision, reports: List[RoleReport]) -> None:
+        gate = self._meeting_quality_gate(reports)
+        decision.coverage = gate["coverage"]
+        decision.missing_requirements = gate["missing"]
+        if gate["missing"] and not decision.blocked_reason:
+            decision.blocked_reason = "Missing meeting coverage: " + ", ".join(gate["missing"])
 
     def _fallback_next_roles(self, called_roles: set[str], reports: List[RoleReport], *, limit: int) -> List[AgentRole]:
         roles: list[AgentRole] = []
@@ -643,6 +707,8 @@ class RoleRunner:
             "Do not call every role mechanically. Call a role only if its perspective is useful for the current uncertainty. "
             "You may call multiple roles in the same round, but never exceed max_roles_per_round. "
             "Finish only when the discussion has enough data/factor, validation, risk, and decision coverage. "
+            "The hard quality gate requires data_factor, validation, risk, experiment, and decision coverage before final. "
+            "Every final plan must name a control arm, benchmark, rank_metric, deal_price, costs/slippage, and WFV promotion gate. "
             "Output strictly valid JSON with keys: action, next_roles, rationale, focus, decision, final_summary, confidence. "
             "action must be call_role or final."
         )
@@ -666,6 +732,7 @@ class RoleRunner:
                     "selected_candidates": (context.candidate_summary or {}).get("selected", {}),
                     "recent_memory": context.memory_context[-3:],
                     "constraints": context.constraints,
+                    "research_constraints": context.research_constraints,
                     "repo_capabilities": context.repo_capabilities[:20],
                 },
             },

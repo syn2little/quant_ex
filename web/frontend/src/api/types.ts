@@ -163,7 +163,14 @@ export interface AgentRunSummary {
   results_count?: number;
   feedback_candidates_count?: number;
   approved_commands_count?: number;
+  has_next_iteration?: boolean;
+  has_agent_tasks?: boolean;
+  has_agent_approval_template?: boolean;
+  agent_tasks_count?: number;
+  agent_task_results_count?: number;
+  approved_agent_tasks_count?: number;
   approval_entries?: Record<string, unknown>[];
+  agent_approval_entries?: Record<string, unknown>[];
   artifacts?: Record<string, unknown> | string[];
   [key: string]: unknown;
 }

@@ -166,10 +166,11 @@ def test_meeting_mode_respects_roles_per_round_limit():
 
     reports = runner.run_meeting(context, use_llm=False, min_turns=4, max_turns=3, max_roles_per_turn=2)
 
-    assert len(reports) == 5
+    assert len(reports) == 6
     called_rounds = [item.get("called_roles") or [] for item in runner.discussion_trace if item.get("called_roles")]
     assert called_rounds[0] == ["data_factor_analyst", "backtest_analyst"]
     assert all(len(roles) <= 2 for roles in called_rounds)
+    assert runner.chair_decisions[-1].missing_requirements == []
 
 
 def test_orchestrator_meeting_settings_override_config():
@@ -187,7 +188,9 @@ def test_orchestrator_meeting_settings_override_config():
     assert run.discussion_mode == "meeting"
     assert run.discussion_settings["max_rounds"] == 3
     assert run.discussion_settings["max_roles_per_round"] == 2
-    assert len(run.plan.role_reports) == 5
+    assert len(run.plan.role_reports) == 6
+    assert run.plan.research_constraints["default_controls"] == ["adaptive_baseline_wf", "adaptive_dd20_wf"]
+    assert run.plan.discussion_decisions[-1].missing_requirements == []
 
 
 def test_meeting_mode_uses_llm_chair_to_select_roles(monkeypatch):

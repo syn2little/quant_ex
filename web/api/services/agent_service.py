@@ -15,6 +15,7 @@ from quant_ex.agent.strategy_iteration import (
     attach_feedback_candidates,
     build_agent_task_plan,
     build_command_plan,
+    execute_approved_agent_tasks,
     execute_approved_commands,
     execute_safe_commands,
     generate_feedback,
@@ -24,6 +25,9 @@ from quant_ex.agent.strategy_iteration import (
     save_command_plan,
 )
 from quant_ex.agent.strategy_iteration.schemas import (
+    AgentTaskPlan,
+    AgentTaskProposal,
+    AgentTaskResult,
     CommandExecutionPlan,
     CommandExecutionResult,
     CommandProposal,
@@ -41,10 +45,18 @@ TEXT_ARTIFACTS = (
     "agent_tasks.md",
     "discussion_trace.md",
     "feedback.md",
+    "next_iteration.md",
     "agent_approval_template.yaml",
     "approval_template.yaml",
 )
-JSON_ARTIFACTS = ("run.json", "commands.json", "agent_tasks.json", "discussion_trace.json", "feedback.json")
+JSON_ARTIFACTS = (
+    "run.json",
+    "commands.json",
+    "agent_tasks.json",
+    "discussion_trace.json",
+    "feedback.json",
+    "next_iteration.json",
+)
 
 
 def list_agent_runs() -> list[dict[str, Any]]:
@@ -59,7 +71,12 @@ def list_agent_runs() -> list[dict[str, Any]]:
 def get_agent_run(run_id: str) -> dict[str, Any]:
     run_dir = _safe_run_dir(run_id)
     summary = _summarize_run(run_dir)
-    payload: dict[str, Any] = {**summary, "approval_entries": _read_approval_entries(run_dir), "artifacts": {}}
+    payload: dict[str, Any] = {
+        **summary,
+        "approval_entries": _read_approval_entries(run_dir),
+        "agent_approval_entries": _read_agent_approval_entries(run_dir),
+        "artifacts": {},
+    }
 
     for name in JSON_ARTIFACTS:
         parsed = _read_json(run_dir / name)
@@ -243,6 +260,59 @@ def update_command_approval(
     return {"run_id": summary["run_id"], "status": summary["status"], "approval_entries": _read_approval_entries(run_dir)}
 
 
+def update_agent_task_approval(
+    run_id: str,
+    task_id: str,
+    *,
+    approved: bool,
+    approved_by: str = "web",
+    reason: str = "",
+) -> dict[str, Any]:
+    run_dir = _safe_run_dir(run_id)
+    agent_plan = _load_agent_task_plan(run_dir)
+    proposal = next((item for item in agent_plan.tasks if item.task_id == task_id), None)
+    if proposal is None:
+        raise HTTPException(status_code=404, detail="Agent task not found")
+
+    template_path = run_dir / "agent_approval_template.yaml"
+    if not template_path.exists():
+        save_agent_approval_template(agent_plan, run_dir)
+    payload = yaml.safe_load(template_path.read_text(encoding="utf-8")) or {}
+    payload["run_id"] = agent_plan.run_id
+    approvals = payload.get("approvals") or []
+    by_id = {str(item.get("task_id") or ""): item for item in approvals if isinstance(item, dict)}
+    entry = by_id.get(task_id)
+    if entry is None:
+        entry = {
+            "task_id": proposal.task_id,
+            "prompt_sha256": proposal.prompt_sha256,
+            "provider": proposal.provider,
+            "mode": proposal.mode,
+            "title": proposal.title,
+        }
+        approvals.append(entry)
+    entry.update(
+        {
+            "prompt_sha256": proposal.prompt_sha256,
+            "approved": approved,
+            "approved_by": approved_by if approved else "",
+            "reason": reason,
+            "approved_at": datetime.now().isoformat(timespec="seconds") if approved else "",
+            "provider": proposal.provider,
+            "mode": proposal.mode,
+            "title": proposal.title,
+        }
+    )
+    payload["approvals"] = approvals
+    template_path.write_text(yaml.safe_dump(payload, allow_unicode=True, sort_keys=False), encoding="utf-8")
+    summary = _summarize_run(run_dir)
+    return {
+        "run_id": summary["run_id"],
+        "status": summary["status"],
+        "agent_approval_entries": _read_agent_approval_entries(run_dir),
+    }
+
+
 def execute_agent_run_safe(
     run_id: str,
     *,
@@ -293,6 +363,50 @@ def execute_agent_run_approved(
     return {"run_id": summary["run_id"], "status": summary["status"], **_artifact_flags(summary)}
 
 
+def execute_agent_run_tasks(
+    run_id: str,
+    *,
+    task_ids: list[str] | None = None,
+    skip_successful: bool = True,
+    worktree_base: str = ".agent_worktrees",
+    codex_bin: str = "codex",
+    progress_callback=None,
+) -> dict[str, Any]:
+    run_dir = _safe_run_dir(run_id)
+    approval_file = run_dir / "agent_approval_template.yaml"
+    if not approval_file.exists():
+        raise HTTPException(status_code=404, detail="Agent approval template not found")
+    agent_plan = _load_agent_task_plan(run_dir)
+    selected_plan = _select_agent_tasks(agent_plan, task_ids)
+    if skip_successful:
+        selected_plan = _skip_successful_agent_tasks(selected_plan, agent_plan.results)
+    _emit_progress(
+        progress_callback,
+        "agent_tasks_start",
+        message="Executing approved coding-agent tasks.",
+        run_id=run_id,
+        task_count=len(selected_plan.tasks),
+    )
+    selected_plan = execute_approved_agent_tasks(
+        selected_plan,
+        approval_file=approval_file,
+        root=PROJECT_ROOT,
+        worktree_base=worktree_base,
+        codex_bin=codex_bin,
+    )
+    agent_plan.results = _merge_agent_results(agent_plan.results, selected_plan.results)
+    save_agent_task_plan(agent_plan, run_dir)
+    _emit_progress(
+        progress_callback,
+        "agent_tasks_done",
+        message="Approved coding-agent tasks completed.",
+        run_id=run_id,
+        result_count=len(selected_plan.results),
+    )
+    summary = _summarize_run(run_dir)
+    return {"run_id": summary["run_id"], "status": summary["status"], **_artifact_flags(summary)}
+
+
 def generate_agent_run_feedback(
     run_id: str,
     command_id: str,
@@ -322,6 +436,12 @@ def generate_agent_run_feedback(
         encoding="utf-8",
     )
     (run_dir / "feedback.md").write_text(feedback.to_markdown(), encoding="utf-8")
+    next_iteration = _build_next_iteration_payload(feedback)
+    (run_dir / "next_iteration.json").write_text(
+        json.dumps(next_iteration, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (run_dir / "next_iteration.md").write_text(_next_iteration_to_markdown(next_iteration), encoding="utf-8")
     save_command_plan(command_plan, run_dir)
     summary = _summarize_run(run_dir)
     return {"run_id": summary["run_id"], "status": summary["status"], "feedback_decision": feedback.decision}
@@ -347,11 +467,15 @@ def _validate_run_id(run_id: str) -> None:
 def _summarize_run(run_dir: Path) -> dict[str, Any]:
     run_payload = _read_json(run_dir / "run.json") or {}
     commands_payload = _read_json(run_dir / "commands.json") or {}
+    agent_tasks_payload = _read_json(run_dir / "agent_tasks.json") or {}
     feedback_payload = _read_json(run_dir / "feedback.json")
     commands = commands_payload.get("commands") or []
     results = commands_payload.get("results") or []
     feedback_candidates = commands_payload.get("feedback_candidates") or []
+    agent_tasks = agent_tasks_payload.get("tasks") or []
+    agent_results = agent_tasks_payload.get("results") or []
     approvals = _read_approval_entries(run_dir)
+    agent_approvals = _read_agent_approval_entries(run_dir)
     stat = run_dir.stat()
 
     return {
@@ -366,12 +490,18 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
         "has_plan": (run_dir / "plan.md").exists(),
         "has_commands": (run_dir / "commands.json").exists(),
         "has_feedback": feedback_payload is not None or (run_dir / "feedback.md").exists(),
+        "has_next_iteration": (run_dir / "next_iteration.json").exists() or (run_dir / "next_iteration.md").exists(),
         "has_execution_summary": (run_dir / "execution_summary.md").exists(),
         "has_approval_template": (run_dir / "approval_template.yaml").exists(),
+        "has_agent_tasks": (run_dir / "agent_tasks.json").exists(),
+        "has_agent_approval_template": (run_dir / "agent_approval_template.yaml").exists(),
         "commands_count": len(commands),
         "results_count": len(results),
         "feedback_candidates_count": len(feedback_candidates),
         "approved_commands_count": len([item for item in approvals if item.get("approved")]),
+        "agent_tasks_count": len(agent_tasks),
+        "agent_task_results_count": len(agent_results),
+        "approved_agent_tasks_count": len([item for item in agent_approvals if item.get("approved")]),
     }
 
 
@@ -390,6 +520,21 @@ def _derive_run_status(
         return "failed"
 
     commands = commands_payload.get("commands") or []
+    agent_tasks_payload = _read_json(run_dir / "agent_tasks.json") or {}
+    agent_tasks = agent_tasks_payload.get("tasks") or []
+    agent_results = agent_tasks_payload.get("results") or []
+    successful_agent_ids = {
+        str(item.get("task_id") or "")
+        for item in agent_results
+        if not item.get("skipped") and item.get("returncode") == 0
+    }
+    pending_agent_tasks = [
+        item
+        for item in agent_tasks
+        if item.get("requires_approval") and str(item.get("task_id") or "") not in successful_agent_ids
+    ]
+    if pending_agent_tasks:
+        return "needs_approval"
     if commands:
         successful_ids = {
             str(item.get("command_id") or "")
@@ -417,8 +562,11 @@ def _artifact_flags(summary: dict[str, Any]) -> dict[str, bool]:
         "has_plan": bool(summary["has_plan"]),
         "has_commands": bool(summary["has_commands"]),
         "has_feedback": bool(summary["has_feedback"]),
+        "has_next_iteration": bool(summary.get("has_next_iteration")),
         "has_execution_summary": bool(summary["has_execution_summary"]),
         "has_approval_template": bool(summary["has_approval_template"]),
+        "has_agent_tasks": bool(summary.get("has_agent_tasks")),
+        "has_agent_approval_template": bool(summary.get("has_agent_approval_template")),
     }
 
 
@@ -433,6 +581,15 @@ def _read_json(path: Path) -> Any | None:
 
 def _read_approval_entries(run_dir: Path) -> list[dict[str, Any]]:
     path = run_dir / "approval_template.yaml"
+    if not path.exists():
+        return []
+    payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    approvals = payload.get("approvals") or []
+    return [item for item in approvals if isinstance(item, dict)]
+
+
+def _read_agent_approval_entries(run_dir: Path) -> list[dict[str, Any]]:
+    path = run_dir / "agent_approval_template.yaml"
     if not path.exists():
         return []
     payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
@@ -491,6 +648,53 @@ def _merge_results(
     return list(by_id.values())
 
 
+def _select_agent_tasks(agent_plan: AgentTaskPlan, task_ids: list[str] | None) -> AgentTaskPlan:
+    if task_ids is None:
+        return agent_plan
+    requested = {str(item) for item in task_ids if str(item)}
+    known = {item.task_id for item in agent_plan.tasks}
+    missing = sorted(requested - known)
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Agent task not found: {', '.join(missing)}")
+    return AgentTaskPlan(
+        run_id=agent_plan.run_id,
+        generated_at=agent_plan.generated_at,
+        policy=agent_plan.policy,
+        tasks=[item for item in agent_plan.tasks if item.task_id in requested],
+        results=[item for item in agent_plan.results if item.task_id in requested],
+    )
+
+
+def _skip_successful_agent_tasks(
+    agent_plan: AgentTaskPlan,
+    previous_results: list[AgentTaskResult],
+) -> AgentTaskPlan:
+    successful = {
+        item.task_id
+        for item in previous_results
+        if not item.skipped and item.returncode == 0
+    }
+    if not successful:
+        return agent_plan
+    return AgentTaskPlan(
+        run_id=agent_plan.run_id,
+        generated_at=agent_plan.generated_at,
+        policy=agent_plan.policy,
+        tasks=[item for item in agent_plan.tasks if item.task_id not in successful],
+        results=[item for item in agent_plan.results if item.task_id not in successful],
+    )
+
+
+def _merge_agent_results(
+    existing: list[AgentTaskResult],
+    updates: list[AgentTaskResult],
+) -> list[AgentTaskResult]:
+    by_id = {item.task_id: item for item in existing}
+    for item in updates:
+        by_id[item.task_id] = item
+    return list(by_id.values())
+
+
 def _load_command_plan(run_dir: Path) -> CommandExecutionPlan:
     commands_payload = _read_json(run_dir / "commands.json")
     if commands_payload:
@@ -503,6 +707,18 @@ def _load_command_plan(run_dir: Path) -> CommandExecutionPlan:
     return build_command_plan(_strategy_plan_from_dict(plan_payload))
 
 
+def _load_agent_task_plan(run_dir: Path) -> AgentTaskPlan:
+    payload = _read_json(run_dir / "agent_tasks.json")
+    if not payload:
+        run_payload = _read_json(run_dir / "run.json")
+        plan_payload = (run_payload or {}).get("plan")
+        if not plan_payload:
+            raise HTTPException(status_code=404, detail="No saved plan or agent task plan for this run")
+        plan = _strategy_plan_from_dict(plan_payload)
+        return build_agent_task_plan(plan)
+    return _agent_task_plan_from_dict(payload)
+
+
 def _command_plan_from_dict(payload: dict[str, Any]) -> CommandExecutionPlan:
     return CommandExecutionPlan(
         run_id=str(payload.get("run_id") or ""),
@@ -511,6 +727,16 @@ def _command_plan_from_dict(payload: dict[str, Any]) -> CommandExecutionPlan:
         commands=[CommandProposal(**item) for item in payload.get("commands") or []],
         results=[CommandExecutionResult(**item) for item in payload.get("results") or []],
         feedback_candidates=[FeedbackCandidate(**item) for item in payload.get("feedback_candidates") or []],
+    )
+
+
+def _agent_task_plan_from_dict(payload: dict[str, Any]) -> AgentTaskPlan:
+    return AgentTaskPlan(
+        run_id=str(payload.get("run_id") or ""),
+        generated_at=str(payload.get("generated_at") or ""),
+        policy=str(payload.get("policy") or ""),
+        tasks=[AgentTaskProposal(**item) for item in payload.get("tasks") or []],
+        results=[AgentTaskResult(**item) for item in payload.get("results") or []],
     )
 
 
@@ -525,4 +751,65 @@ def _strategy_plan_from_dict(payload: dict[str, Any]) -> StrategyIterationPlan:
         decision_gates=[str(item) for item in payload.get("decision_gates") or []],
         synthesis=str(payload.get("synthesis") or ""),
         next_actions=[str(item) for item in payload.get("next_actions") or []],
+        research_constraints=dict(payload.get("research_constraints") or {}),
     )
+
+
+def _build_next_iteration_payload(feedback) -> dict[str, Any]:
+    decision = str(feedback.decision or "hold")
+    if decision in {"reject", "downgrade"}:
+        objective = (
+            f"Design a smaller orthogonal ablation after {feedback.run_id} was {decision}; "
+            "keep adaptive_baseline_wf/adaptive_dd20_wf controls and avoid repeating the refuted configuration."
+        )
+    elif decision in {"compare_next", "hold"}:
+        objective = (
+            f"Escalate {feedback.run_id} only one validation rung with unchanged benchmark, rank_metric, "
+            "deal_price, cost, and slippage assumptions."
+        )
+    else:
+        objective = (
+            f"Review whether {feedback.run_id} has enough WFV-grade evidence for candidate-index promotion."
+        )
+    return {
+        "run_id": feedback.run_id,
+        "generated_at": datetime.now().isoformat(timespec="seconds"),
+        "feedback_decision": feedback.decision,
+        "hypothesis_evaluation": feedback.hypothesis_evaluation,
+        "recommended_objective": objective,
+        "recommended_controls": ["adaptive_baseline_wf", "adaptive_dd20_wf"],
+        "rank_metric": feedback.result.rank_metric or "information_ratio",
+        "next_ablation": feedback.next_ablation,
+        "do_not_repeat": feedback.do_not_repeat,
+        "validation_ladder": [
+            "Run import/registry/focused tests first.",
+            "Run same-model backtest only as a cheap filter.",
+            "Escalate to WFV only after explicit user approval.",
+            "Append strategy_iteration_log.csv only for durable conclusions.",
+        ],
+    }
+
+
+def _next_iteration_to_markdown(payload: dict[str, Any]) -> str:
+    lines = [
+        f"# Next Agent Iteration: {payload.get('run_id')}",
+        "",
+        f"- Generated: {payload.get('generated_at')}",
+        f"- Feedback decision: {payload.get('feedback_decision')}",
+        f"- Hypothesis evaluation: {payload.get('hypothesis_evaluation')}",
+        f"- Rank metric: {payload.get('rank_metric')}",
+        "",
+        "## Recommended Objective",
+        str(payload.get("recommended_objective") or ""),
+        "",
+        "## Controls",
+        *[f"- {item}" for item in payload.get("recommended_controls") or []],
+        "",
+        "## Validation Ladder",
+        *[f"- {item}" for item in payload.get("validation_ladder") or []],
+    ]
+    if payload.get("next_ablation"):
+        lines.extend(["", "## Next Ablation", str(payload.get("next_ablation"))])
+    if payload.get("do_not_repeat"):
+        lines.extend(["", "## Do Not Repeat", *[f"- {item}" for item in payload.get("do_not_repeat") or []]])
+    return "\n".join(lines) + "\n"
