@@ -2,6 +2,12 @@
 
 from .orchestrator import StrategyIterationOrchestrator
 from .evaluator import generate_feedback, parse_metric_snapshot
+from .promotion_report import build_promotion_report
+from .validation_contract import (
+    detect_result_kind,
+    parse_validated_snapshot,
+    validate_result_contract,
+)
 from .execution import (
     attach_feedback_candidates,
     build_execution_summary,
@@ -34,11 +40,13 @@ from .schemas import (
     ExperimentArm,
     FeedbackCandidate,
     MetricSnapshot,
+    PromotionReport,
     RoleReport,
     StrategyFeedback,
     StrategyIterationPlan,
     StrategyProjectContext,
     StrategyIterationRun,
+    ValidationContractResult,
 )
 from .validation import validate_role_report
 
@@ -59,24 +67,30 @@ __all__ = [
     "ExperimentArm",
     "FeedbackCandidate",
     "MetricSnapshot",
+    "PromotionReport",
     "RoleReport",
     "StrategyFeedback",
     "StrategyIterationOrchestrator",
     "StrategyIterationPlan",
     "StrategyProjectContext",
     "StrategyIterationRun",
+    "ValidationContractResult",
     "attach_feedback_candidates",
+    "build_promotion_report",
     "build_agent_task_plan",
     "build_execution_summary",
     "build_command_plan",
     "execute_approved_commands",
     "execute_approved_agent_tasks",
     "execute_safe_commands",
+    "detect_result_kind",
     "generate_feedback",
     "parse_metric_snapshot",
+    "parse_validated_snapshot",
     "save_approval_template",
     "save_agent_approval_template",
     "save_agent_task_plan",
     "save_command_plan",
+    "validate_result_contract",
     "validate_role_report",
 ]

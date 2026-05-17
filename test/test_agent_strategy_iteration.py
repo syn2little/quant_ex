@@ -13,6 +13,8 @@ from agent.strategy_iteration.agent_execution import (
 )
 from agent.strategy_iteration.context import build_project_context
 from agent.strategy_iteration.evaluator import generate_feedback, parse_metric_snapshot
+from agent.strategy_iteration.promotion_report import build_promotion_report
+from agent.strategy_iteration.validation_contract import detect_result_kind, validate_result_contract
 from agent.strategy_iteration.llm import OpenAICompatibleChatClient, _repair_mojibake
 from agent.strategy_iteration.execution import (
     EXPENSIVE_TAG,
@@ -447,6 +449,59 @@ def test_generate_feedback_reads_walk_forward_summary(tmp_path: Path):
     assert feedback.decision == "compare_next"
 
 
+def test_validation_contract_warns_when_backtest_lacks_ir(tmp_path: Path):
+    result = tmp_path / "legacy_backtest.csv"
+    result.write_text(
+        "topk,n_drop,hold_thresh,sharpe,max_drawdown\n"
+        "15,3,8,1.1,-0.2\n",
+        encoding="utf-8",
+    )
+
+    contract = validate_result_contract(result, result_kind="auto", rank_metric="information_ratio")
+
+    assert detect_result_kind(contract.columns, result) == "backtest"
+    assert contract.result_kind == "backtest"
+    assert contract.rank_metric_used == "sharpe"
+    assert any("information_ratio" in warning for warning in contract.warnings)
+
+
+def test_promotion_report_blocks_backtest_only_promotion(tmp_path: Path):
+    result = tmp_path / "candidate.csv"
+    control = tmp_path / "control.csv"
+    result.write_text(
+        "market,topk,n_drop,hold_thresh,information_ratio,sharpe,max_drawdown,tracking_error,alpha,beta\n"
+        "csi300,15,3,8,0.7,1.5,-0.1,0.2,0.1,0.9\n",
+        encoding="utf-8",
+    )
+    control.write_text(
+        "market,topk,n_drop,hold_thresh,information_ratio,sharpe,max_drawdown,tracking_error,alpha,beta\n"
+        "csi300,15,3,8,0.5,1.2,-0.1,0.2,0.1,0.9\n",
+        encoding="utf-8",
+    )
+
+    report = build_promotion_report(run_id="promo_backtest", result_csv=result, control_csv=control)
+
+    assert report.decision == "compare_next"
+    assert report.evidence_level == "backtest_filter"
+    assert report.promotion_status == "not_promotable"
+    assert any(gate["name"] == "wfv_required_for_promotion" and not gate["passed"] for gate in report.gates)
+
+
+def test_promotion_report_blocks_weak_wfv_min_sharpe(tmp_path: Path):
+    summary = tmp_path / "walk_forward_summary.csv"
+    summary.write_text(
+        "train_universe,eval_market,topk,n_drop,hold_thresh,folds,mean_sharpe,min_sharpe,worst_max_drawdown,positive_sharpe_folds,sharpe_ttest_pvalue,robust_score\n"
+        "csi1000,csi300,15,3,8,7,1.2,-0.4,-0.2,6,0.04,0.9\n",
+        encoding="utf-8",
+    )
+
+    report = build_promotion_report(run_id="promo_wfv", result_csv=summary, result_kind="walk_forward")
+
+    assert report.evidence_level == "wfv"
+    assert report.decision == "compare_next"
+    assert any(gate["name"] == "wfv_min_sharpe" and not gate["passed"] for gate in report.gates)
+
+
 def test_cli_feedback_writes_feedback_bundle(tmp_path: Path):
     result = tmp_path / "result.csv"
     result.write_text(
@@ -471,6 +526,8 @@ def test_cli_feedback_writes_feedback_bundle(tmp_path: Path):
     assert exit_code == 0
     assert (output_dir / "feedback_cli" / "feedback.json").exists()
     assert (output_dir / "feedback_cli" / "feedback.md").exists()
+    assert (output_dir / "feedback_cli" / "promotion_report.json").exists()
+    assert (output_dir / "feedback_cli" / "promotion_report.md").exists()
 
 
 def test_command_classifier_requires_approval_for_expensive_commands():

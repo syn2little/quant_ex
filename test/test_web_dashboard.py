@@ -628,6 +628,11 @@ def test_agent_feedback_generation_from_ready_candidate(monkeypatch, tmp_path):
     assert payload["feedback_decision"] == "hold"
     assert (run_dir / "feedback.json").exists()
     assert (run_dir / "feedback.md").exists()
+    assert (run_dir / "promotion_report.json").exists()
+    assert (run_dir / "promotion_report.md").exists()
+    detail = agent_service.get_agent_run("feedback_ready")
+    assert detail["has_promotion_report"] is True
+    assert "promotion_report.md" in detail["artifacts"]
 
 
 def test_wfv_command_includes_advanced_web_params():

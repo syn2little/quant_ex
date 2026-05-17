@@ -12,6 +12,7 @@ from agent.strategy_iteration.agent_execution import (
     save_agent_task_plan,
 )
 from agent.strategy_iteration.evaluator import generate_feedback
+from agent.strategy_iteration.promotion_report import build_promotion_report
 from agent.strategy_iteration.execution import (
     attach_feedback_candidates,
     build_command_plan,
@@ -119,6 +120,18 @@ def main(argv: list[str] | None = None) -> int:
             encoding="utf-8",
         )
         (run_dir / "feedback.md").write_text(feedback.to_markdown(), encoding="utf-8")
+        promotion_report = build_promotion_report(
+            run_id=args.feedback_run_id,
+            result_csv=args.result_csv,
+            control_csv=args.control_csv,
+            result_kind=args.result_kind,
+            rank_metric=args.rank_metric or "information_ratio",
+        )
+        (run_dir / "promotion_report.json").write_text(
+            json.dumps(promotion_report.to_dict(), ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        (run_dir / "promotion_report.md").write_text(promotion_report.to_markdown(), encoding="utf-8")
         if not args.no_memory:
             StrategyAgentMemoryLog(orchestrator.memory_log_path).append_feedback(feedback)
         print(run_dir / "feedback.json")

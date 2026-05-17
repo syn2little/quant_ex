@@ -9,7 +9,7 @@ import { useSSE } from "../hooks/useSSE";
 import type { SSEEvent } from "../hooks/useSSE";
 import type { AgentRunCreateRequest, AgentRunDetail, AgentRunSummary } from "../api/types";
 
-type AgentTabKey = "plan" | "commands" | "agentTasks" | "summary" | "feedback" | "approval" | "raw";
+type AgentTabKey = "plan" | "commands" | "agentTasks" | "summary" | "feedback" | "promotion" | "approval" | "raw";
 type DiscussionMode = "sequential" | "meeting";
 type AgentMode = "readonly" | "patch" | "danger-full-access";
 type AgentCommand = {
@@ -87,6 +87,7 @@ const DETAIL_TABS: { key: AgentTabKey; labelKey: string }[] = [
   { key: "agentTasks", labelKey: "agentRuns.agentTasks" },
   { key: "summary", labelKey: "agentRuns.summary" },
   { key: "feedback", labelKey: "agentRuns.feedback" },
+  { key: "promotion", labelKey: "agentRuns.promotionReport" },
   { key: "approval", labelKey: "agentRuns.approval" },
   { key: "raw", labelKey: "agentRuns.raw" },
 ];
@@ -97,6 +98,7 @@ const ARTIFACT_KEYS = [
   { key: "task", flag: "has_agent_tasks", fields: ["agent_tasks.md", "agent_tasks.json", "agent_tasks", "agent_tasks_path"] },
   { key: "sum", flag: "has_execution_summary", fields: ["execution_summary.md", "execution_summary", "summary", "execution_summary_path"] },
   { key: "fb", flag: "has_feedback", fields: ["feedback.md", "feedback.json", "feedback", "feedback_path"] },
+  { key: "promo", flag: "has_promotion_report", fields: ["promotion_report.md", "promotion_report.json", "promotion_report", "promotion_report_path"] },
   { key: "tpl", flag: "has_approval_template", fields: ["approval_template.yaml", "approval_template", "approval", "approval_template_path"] },
 ];
 const MAX_LIVE_LOG_LINES = 500;
@@ -801,6 +803,7 @@ export function AgentRunsPage() {
     if (activeTab === "agentTasks") return firstText(detail, ["agent_tasks.md", "agent_tasks"]) || coerceText(artifactValue(detail, "agent_tasks.json"));
     if (activeTab === "summary") return firstText(detail, ["execution_summary.md", "execution_summary", "summary"]);
     if (activeTab === "feedback") return firstText(detail, ["feedback.md", "feedback"]) || coerceText(artifactValue(detail, "feedback.json"));
+    if (activeTab === "promotion") return firstText(detail, ["promotion_report.md", "promotion_report"]) || coerceText(artifactValue(detail, "promotion_report.json"));
     if (activeTab === "approval") return firstText(detail, ["approval_template.yaml", "approval_template", "approval"]);
     return formatJson(detail?.raw ?? detail);
   }, [activeTab, detail]);

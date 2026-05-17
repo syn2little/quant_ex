@@ -337,6 +337,7 @@
     "agentTasks": "Agent Tasks",
     "summary": "Execution Summary",
     "feedback": "Feedback",
+    "promotionReport": "Promotion Report",
     "approval": "Approval Template",
     "raw": "Raw JSON",
     "execution": "Execution Control",

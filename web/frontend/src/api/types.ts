@@ -157,6 +157,7 @@ export interface AgentRunSummary {
   has_plan?: boolean;
   has_commands?: boolean;
   has_feedback?: boolean;
+  has_promotion_report?: boolean;
   has_execution_summary?: boolean;
   has_approval_template?: boolean;
   commands_count?: number;

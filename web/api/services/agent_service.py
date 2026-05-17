@@ -19,6 +19,7 @@ from quant_ex.agent.strategy_iteration import (
     execute_approved_commands,
     execute_safe_commands,
     generate_feedback,
+    build_promotion_report,
     save_agent_approval_template,
     save_agent_task_plan,
     save_approval_template,
@@ -46,6 +47,7 @@ TEXT_ARTIFACTS = (
     "discussion_trace.md",
     "feedback.md",
     "next_iteration.md",
+    "promotion_report.md",
     "agent_approval_template.yaml",
     "approval_template.yaml",
 )
@@ -56,6 +58,7 @@ JSON_ARTIFACTS = (
     "discussion_trace.json",
     "feedback.json",
     "next_iteration.json",
+    "promotion_report.json",
 )
 
 
@@ -436,6 +439,18 @@ def generate_agent_run_feedback(
         encoding="utf-8",
     )
     (run_dir / "feedback.md").write_text(feedback.to_markdown(), encoding="utf-8")
+    promotion_report = build_promotion_report(
+        run_id=run_id,
+        result_csv=result_csv,
+        control_csv=control_csv,
+        result_kind=candidate.result_kind,
+        rank_metric=rank_metric or "information_ratio",
+    )
+    (run_dir / "promotion_report.json").write_text(
+        json.dumps(promotion_report.to_dict(), ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    (run_dir / "promotion_report.md").write_text(promotion_report.to_markdown(), encoding="utf-8")
     next_iteration = _build_next_iteration_payload(feedback)
     (run_dir / "next_iteration.json").write_text(
         json.dumps(next_iteration, ensure_ascii=False, indent=2),
@@ -491,6 +506,7 @@ def _summarize_run(run_dir: Path) -> dict[str, Any]:
         "has_commands": (run_dir / "commands.json").exists(),
         "has_feedback": feedback_payload is not None or (run_dir / "feedback.md").exists(),
         "has_next_iteration": (run_dir / "next_iteration.json").exists() or (run_dir / "next_iteration.md").exists(),
+        "has_promotion_report": (run_dir / "promotion_report.json").exists() or (run_dir / "promotion_report.md").exists(),
         "has_execution_summary": (run_dir / "execution_summary.md").exists(),
         "has_approval_template": (run_dir / "approval_template.yaml").exists(),
         "has_agent_tasks": (run_dir / "agent_tasks.json").exists(),
@@ -563,6 +579,7 @@ def _artifact_flags(summary: dict[str, Any]) -> dict[str, bool]:
         "has_commands": bool(summary["has_commands"]),
         "has_feedback": bool(summary["has_feedback"]),
         "has_next_iteration": bool(summary.get("has_next_iteration")),
+        "has_promotion_report": bool(summary.get("has_promotion_report")),
         "has_execution_summary": bool(summary["has_execution_summary"]),
         "has_approval_template": bool(summary["has_approval_template"]),
         "has_agent_tasks": bool(summary.get("has_agent_tasks")),

@@ -623,6 +623,111 @@ class MetricSnapshot:
 
 
 @dataclass
+class ValidationContractResult:
+    """Schema and comparability check for a backtest or WFV result CSV."""
+
+    source_path: str
+    result_kind: str
+    row_count: int
+    columns: List[str] = field(default_factory=list)
+    rank_metric_requested: str = ""
+    rank_metric_used: str = ""
+    required_fields: List[str] = field(default_factory=list)
+    missing_required_fields: List[str] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    is_benchmark_aware: bool = False
+    comparability_fields: Dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def ok(self) -> bool:
+        return self.row_count > 0 and not self.missing_required_fields
+
+    def to_dict(self) -> Dict[str, Any]:
+        payload = asdict(self)
+        payload["ok"] = self.ok
+        return payload
+
+
+@dataclass
+class PromotionReport:
+    """Promotion-gate report for deciding whether a candidate may advance."""
+
+    run_id: str
+    generated_at: str
+    decision: str
+    promotion_status: str
+    evidence_level: str
+    result: MetricSnapshot
+    result_contract: ValidationContractResult
+    control: Optional[MetricSnapshot] = None
+    control_contract: Optional[ValidationContractResult] = None
+    deltas: Dict[str, float] = field(default_factory=dict)
+    gates: List[Dict[str, Any]] = field(default_factory=list)
+    warnings: List[str] = field(default_factory=list)
+    recommendation: str = ""
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "run_id": self.run_id,
+            "generated_at": self.generated_at,
+            "decision": self.decision,
+            "promotion_status": self.promotion_status,
+            "evidence_level": self.evidence_level,
+            "result": self.result.to_dict(),
+            "result_contract": self.result_contract.to_dict(),
+            "control": self.control.to_dict() if self.control else None,
+            "control_contract": self.control_contract.to_dict() if self.control_contract else None,
+            "deltas": dict(self.deltas),
+            "gates": list(self.gates),
+            "warnings": list(self.warnings),
+            "recommendation": self.recommendation,
+        }
+
+    def to_markdown(self) -> str:
+        lines = [
+            f"# Promotion Report: {self.run_id}",
+            "",
+            f"- Generated: {self.generated_at}",
+            f"- Decision: {self.decision}",
+            f"- Promotion status: {self.promotion_status}",
+            f"- Evidence level: {self.evidence_level}",
+            f"- Recommendation: {self.recommendation}",
+            "",
+            "## Result Contract",
+            f"- Source: `{self.result_contract.source_path}`",
+            f"- Kind: {self.result_contract.result_kind}",
+            f"- Rows: {self.result_contract.row_count}",
+            f"- Rank metric requested: {self.result_contract.rank_metric_requested or 'auto'}",
+            f"- Rank metric used: {self.result_contract.rank_metric_used or 'none'}",
+            f"- Benchmark aware: {self.result_contract.is_benchmark_aware}",
+        ]
+        if self.result_contract.missing_required_fields:
+            lines.extend(["- Missing required fields:", *[f"  - {item}" for item in self.result_contract.missing_required_fields]])
+        if self.control_contract:
+            lines.extend(
+                [
+                    "",
+                    "## Control Contract",
+                    f"- Source: `{self.control_contract.source_path}`",
+                    f"- Kind: {self.control_contract.result_kind}",
+                    f"- Rank metric used: {self.control_contract.rank_metric_used or 'none'}",
+                ]
+            )
+        lines.extend(["", "## Best Row", f"- Result: `{self.result.best_row}`"])
+        if self.control:
+            lines.append(f"- Control: `{self.control.best_row}`")
+        if self.deltas:
+            lines.extend(["", "## Deltas", *[f"- {key}: {value:+.6f}" for key, value in self.deltas.items()]])
+        lines.extend(["", "## Gates"])
+        for gate in self.gates:
+            status = "PASS" if gate.get("passed") else "BLOCK"
+            lines.append(f"- {status} `{gate.get('name')}`: {gate.get('detail')}")
+        if self.warnings:
+            lines.extend(["", "## Warnings", *[f"- {item}" for item in self.warnings]])
+        return "\n".join(lines) + "\n"
+
+
+@dataclass
 class StrategyFeedback:
     """Feedback object generated after an agent plan has measurable outcomes."""
 

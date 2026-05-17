@@ -337,6 +337,7 @@
     "agentTasks": "Agent 任务",
     "summary": "执行摘要",
     "feedback": "反馈",
+    "promotionReport": "晋级报告",
     "approval": "审批模板",
     "raw": "原始 JSON",
     "execution": "执行控制",
