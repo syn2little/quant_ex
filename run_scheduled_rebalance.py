@@ -94,6 +94,12 @@ def _parse_args() -> argparse.Namespace:
         help="实际持仓覆盖，格式: SH600489:900 或 SH600489:900:2026-04-29（含建仓日期）。用于从真实持仓计算调仓差分和收益。",
     )
     parser.add_argument(
+        "--replay-from-initial-positions",
+        action="store_true",
+        help="将 --positions 视为起始持仓，从 --position-date/建仓日期/回测起点逐日按策略信号回放到今天，"
+             "再用回放后的持仓计算今日调仓差分。假设每次信号均按次交易日收盘价执行。",
+    )
+    parser.add_argument(
         "--position-date",
         type=str,
         default=None,
@@ -557,6 +563,26 @@ def _parse_positions_arg(positions_str: str, trade_date: str) -> Dict[str, Dict[
     return result
 
 
+def _positions_start_date(
+    positions_str: str,
+    cfg: Dict[str, Any],
+    position_date: Optional[str] = None,
+) -> str:
+    """Infer the date for an initial --positions snapshot."""
+    if position_date:
+        return pd.Timestamp(position_date).normalize().strftime("%Y-%m-%d")
+
+    entry_dates: List[pd.Timestamp] = []
+    for item in positions_str.split(","):
+        parts = [part.strip() for part in item.strip().split(":")]
+        if len(parts) == 3 and parts[2]:
+            entry_dates.append(pd.Timestamp(parts[2]).normalize())
+    if entry_dates:
+        return min(entry_dates).strftime("%Y-%m-%d")
+
+    return pd.Timestamp(cfg["start_date"]).normalize().strftime("%Y-%m-%d")
+
+
 def _clone_position_snapshot(snapshot: Dict[str, Dict[str, Any]]) -> Dict[str, Dict[str, Any]]:
     """Return a JSON/cache-friendly position snapshot with normalized numbers."""
     result: Dict[str, Dict[str, Any]] = {}
@@ -843,6 +869,139 @@ def _load_executed_positions_from_cache(
             "source_cache": str(path),
         }
     return positions
+
+
+def _replay_positions_from_initial(
+    config: dict,
+    cfg: Dict[str, Any],
+    initial_positions: Dict[str, Dict[str, Any]],
+    initial_date: str,
+    trade_date: str,
+    trading_calendar: List[pd.Timestamp],
+) -> Tuple[Dict[str, Dict[str, Any]], Optional[Dict[str, float]]]:
+    """Roll an initial real-position snapshot forward by applying daily signals.
+
+    This is a convenience path for manual workflows: it assumes every generated
+    rebalance signal is executed at the next trading day's close. It should not
+    be used when actual fills materially diverged from the generated signals.
+    """
+    if not trading_calendar:
+        return _clone_position_snapshot(initial_positions), None
+
+    start_ts = pd.Timestamp(initial_date).normalize()
+    trade_ts = pd.Timestamp(trade_date).normalize()
+    signal_days = [day for day in trading_calendar if start_ts <= day < trade_ts]
+    if not signal_days:
+        return _refresh_position_prices(initial_positions, trade_date), None
+
+    last_signal_date = signal_days[-1].strftime("%Y-%m-%d")
+    model = _load_model(config, cfg.get("model_path", ""))
+    data_loader = DataLoader(config)
+    universe_filter = UniverseFilter(config.get("strategy", {}))
+    pred = _predict_for_replay(
+        model=model,
+        data_loader=data_loader,
+        universe_filter=universe_filter,
+        config=config,
+        instruments=cfg["market"],
+        start=cfg["start_date"],
+        end=last_signal_date,
+    )
+    engine = BacktestEngine(config)
+    _report, qlib_positions = engine.run(
+        pred=pred,
+        strategy_params={
+            "topk": cfg["topk"],
+            "n_drop": cfg["n_drop"],
+            "hold_thresh": 0,
+        },
+        start_time=cfg["start_date"],
+        end_time=last_signal_date,
+        account=cfg["account"],
+        universe_filter=None,
+    )
+    position_items = _sorted_position_items(qlib_positions)
+    if not position_items:
+        raise RuntimeError("初始持仓回放失败：回测没有返回 position 数据。")
+
+    positions = _clone_position_snapshot(initial_positions)
+    pnl_carry: Optional[Dict[str, float]] = None
+    latest_obj = None
+    position_idx = 0
+    acct = float(cfg.get("account", 0))
+    port_cfg = config.get("strategy", {}).get("portfolio", {})
+    max_pct = float(port_cfg.get("max_position_pct", 0))
+    min_val = float(cfg.get("min_action_value", 0))
+    replayed = 0
+    for signal_day in signal_days:
+        next_trade_date, exact_next = _next_trading_day(signal_day, trading_calendar)
+        next_ts = pd.Timestamp(next_trade_date).normalize()
+        if not exact_next or next_ts > trade_ts:
+            continue
+        signal_date = signal_day.strftime("%Y-%m-%d")
+        while position_idx < len(position_items) and position_items[position_idx][0] <= signal_day:
+            latest_obj = position_items[position_idx][1]
+            position_idx += 1
+        if latest_obj is None:
+            continue
+
+        positions = _refresh_position_prices(positions, signal_date)
+        target = _convert_snapshot_to_actual_prices(
+            _snapshot(latest_obj),
+            signal_date,
+            account_value=acct,
+            max_position_pct=max_pct,
+        )
+        actions = _diff_positions(positions, target)
+        raw_position_date = cfg.get("position_date")
+        if raw_position_date:
+            position_date_ts = pd.Timestamp(raw_position_date).normalize()
+        else:
+            prev_str, _ = _previous_trading_day(signal_day, trading_calendar)
+            position_date_ts = pd.Timestamp(prev_str).normalize()
+        actions, target = _apply_hold_protection(
+            actions=actions,
+            target=target,
+            actual_positions=positions,
+            position_date=position_date_ts,
+            trade_date=signal_day,
+            hold_thresh=int(cfg.get("hold_thresh", 5)),
+            trading_calendar=trading_calendar,
+            topk=int(cfg.get("topk", 5)),
+        )
+        if min_val > 0:
+            actions = [action for action in actions if action.value >= min_val]
+
+        portfolio_pnl = _compute_portfolio_pnl(
+            positions,
+            signal_date,
+            trading_calendar,
+            default_entry_date=position_date_ts.strftime("%Y-%m-%d"),
+            pnl_carry=pnl_carry,
+        )
+        pnl_carry = _pnl_carry_after_actions(portfolio_pnl, actions)
+        logger.info(
+            "初始持仓回放: %s 信号 -> %s 执行（%d 笔动作）。",
+            signal_date,
+            next_trade_date,
+            len(actions),
+        )
+        positions = _annotate_executed_target(
+            _positions_after_actions(positions, target, actions),
+            positions,
+            next_trade_date,
+        )
+        replayed += 1
+
+    positions = _refresh_position_prices(positions, trade_date)
+    logger.info(
+        "初始持仓已从 %s 回放到 %s（应用 %d 次历史信号，当前 %d 只）。",
+        initial_date,
+        trade_date,
+        replayed,
+        len(positions),
+    )
+    return positions, pnl_carry
 
 
 def _sorted_position_items(positions: dict) -> List[Tuple[pd.Timestamp, Any]]:
@@ -1717,21 +1876,40 @@ def main() -> None:
         logger.warning("未在交易日历中找到下一交易日，暂按下一个工作日推断: %s", next_trade_date)
 
     actual_positions: Optional[Dict[str, Dict[str, float]]] = None
-    if args.positions:
+    pnl_carry: Optional[Dict[str, float]] = None
+    display_portfolio_pnl = None
+    if args.replay_from_initial_positions:
+        if not args.positions:
+            raise ValueError("--replay-from-initial-positions 需要同时提供 --positions 起始持仓。")
+        initial_date = _positions_start_date(args.positions, cfg, cfg.get("position_date"))
+        initial_positions = _parse_positions_arg(args.positions, initial_date)
+        logger.info(
+            "已解析 --positions 起始持仓: %s（起始日 %s）。",
+            list(initial_positions.keys()),
+            initial_date,
+        )
+        actual_positions, pnl_carry = _replay_positions_from_initial(
+            config,
+            cfg,
+            initial_positions,
+            initial_date,
+            trade_date_str,
+            list(trading_calendar),
+        )
+    elif args.positions:
         actual_positions = _parse_positions_arg(args.positions, trade_date_str)
         logger.info("已解析 --positions 实际持仓: %s", list(actual_positions.keys()))
 
-    pnl_carry: Optional[Dict[str, float]] = None
-    display_portfolio_pnl = None
-    cached_state = _load_executed_state_from_cache(cfg, trade_date_str, list(trading_calendar))
-    if cached_state is not None:
-        if actual_positions is not None:
-            logger.info("上一条已执行缓存覆盖 --positions；如昨日信号未执行，请加 --no-cache-roll-forward。")
-        actual_positions = cached_state["positions"]
-        pnl_carry = cached_state.get("pnl_carry")
-        display_portfolio_pnl = cached_state.get("display_portfolio_pnl")
-        if pnl_carry and float(pnl_carry.get("cum_pnl", 0) or 0) != 0:
-            logger.info("延续历史累计收益: %.0f 元。", float(pnl_carry.get("cum_pnl", 0) or 0))
+    if not args.replay_from_initial_positions:
+        cached_state = _load_executed_state_from_cache(cfg, trade_date_str, list(trading_calendar))
+        if cached_state is not None:
+            if actual_positions is not None:
+                logger.info("上一条已执行缓存覆盖 --positions；如昨日信号未执行，请加 --no-cache-roll-forward。")
+            actual_positions = cached_state["positions"]
+            pnl_carry = cached_state.get("pnl_carry")
+            display_portfolio_pnl = cached_state.get("display_portfolio_pnl")
+            if pnl_carry and float(pnl_carry.get("cum_pnl", 0) or 0) != 0:
+                logger.info("延续历史累计收益: %.0f 元。", float(pnl_carry.get("cum_pnl", 0) or 0))
 
     report, details = _run_real_rebalance(
         config,
