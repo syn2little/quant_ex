@@ -24,7 +24,7 @@
 - Bark / PushPlus / 钉钉 / Server 酱 / 微信模板消息通知
 - 东方财富行业与概念数据缓存
 - Claude API 辅助参数优化
-- Agent 策略迭代：多角色 LLM/离线 planner、prompt/context/trace 记录、命令审批模板、回测/WFV feedback 回灌
+- Agent 策略迭代：多角色 LLM/离线 planner、prompt/context/trace 记录、命令审批模板、回测/WFV feedback 回灌、Phase7 performance attribution 与实验预算门控
 - Web Dashboard：本地可视化面板（数据管理、模型训练/浏览、回测、信号生成、因子分析、配置编辑、Agent Runs），中英文切换
 
 > 本项目仅用于研究和辅助决策，不构成投资建议。
@@ -323,6 +323,7 @@ optimization_results/walk_forward_<run_id>/
 - `agent_tasks.json` / `agent_tasks.md`：可选 `--use-agent` 生成的本地 Codex/Claude 类 coding-agent 任务提案
 - `agent_approval_template.yaml`：coding-agent 任务审批模板，按 `task_id` + `prompt_sha256` 锁定
 - `feedback.json` / `feedback.md`：回测或 WFV CSV 回灌后的结果评价
+- `attribution_report.json` / `attribution_report.md`：Phase7 起自动生成的 performance attribution 摘要，用于比较 `adaptive_baseline_wf` 与 `adaptive_dd20_wf` 等控制/候选关系
 - `docs/strategy_log/agent_memory.md`：跨 run 的追加式 agent memory
 
 离线计划（默认不调用模型）：
@@ -346,6 +347,36 @@ optimization_results/walk_forward_<run_id>/
   --propose-actions \
   --write-approval-template
 ```
+
+Phase7 performance attribution smoke：
+
+```bash
+./.venv/bin/python run_agent_strategy_iteration.py \
+  --objective "Phase 7: Agent Performance Attribution and Experiment Budgeting" \
+  --run-id phase7_agent_attribution_smoke \
+  --no-llm \
+  --no-memory \
+  --discussion-mode meeting \
+  --meeting-max-rounds 3 \
+  --meeting-max-roles-per-round 2
+```
+
+Phase7 的目标不是直接声称策略收益提升，而是让 agent 在提出下一轮研究前先回答：当前性能瓶颈来自收益不足、稳定性不足，还是二者 tradeoff。当前默认比较为 `adaptive_baseline_wf` vs `adaptive_dd20_wf`；如果找不到 fold-level `walk_forward_summary.csv`，会 fallback 到 `config/strategy_candidates.yaml`，并生成 `attribution_report.*`。
+
+Phase7 预算门控规则：
+
+- 每轮只允许 1 个 `primary_experiment` 和 1 个 `cheap_diagnostic`。
+- 必须带 control、候选、推荐实验、kill criteria。
+- 不自动触发完整 WFV、数据更新、通知或实盘类动作。
+- planner 改动不能记作策略收益；只有后续真实 same-model/WFV 实验改善指标，才进入策略贡献判断。
+
+如何验证 Phase7 是否真的有贡献：
+
+1. 运行同一 objective 的 Phase7 smoke，检查 `plan.md` 是否只输出两个 arms，并且包含 `attribution_report` 与 kill criteria。
+2. 对比 Phase7 前后的计划质量：旧计划若继续产出 Phase1 infrastructure arms 或重复失败路线，Phase7 计划应改为围绕 `adaptive_dd20_wf` 的 return repair。
+3. 检查 `attribution_report.md` 是否明确指出当前 tradeoff：`adaptive_dd20_wf` 提供稳定性，但收益相对 baseline 有缺口。
+4. 下一次真实策略实验只跑一个 narrow return-repair diagnostic；若不能保持 7/7 positive folds 或 drawdown 优势，按 kill criteria 停止。
+5. 只有当后续 WFV 显示 IR/Sharpe 改善且 MaxDD、turnover、concentration 不显著退化，才把 Phase7 视为间接贡献了策略性能；否则它只贡献了研究纪律和预算节约。
 
 回测/WFV 结果回灌：
 
