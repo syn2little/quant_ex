@@ -15,6 +15,7 @@ from quant_ex.run_scheduled_rebalance import (
     _pnl_carry_after_actions,
     _positions_after_actions,
     _previous_trading_day,
+    _rebuild_signal_for_reminder,
     _resolve_cfg_start_date,
     RebalanceAction,
 )
@@ -417,3 +418,96 @@ def test_pnl_carry_after_actions_realizes_sold_position_pnl():
     )
 
     assert carry["cum_pnl"] == 500.0
+
+def test_reminder_rebuild_replays_initial_positions_before_real_rebalance(monkeypatch):
+    calendar = pd.to_datetime(["2026-04-30", "2026-05-19", "2026-05-20"]).tolist()
+    cfg = {
+        "market": "csi300",
+        "topk": 5,
+        "n_drop": 5,
+        "hold_thresh": 5,
+        "start_date": "2026-04-30",
+        "account": 100000.0,
+        "cache_dir": "unused",
+        "create_update_tarball": False,
+        "positions": "SH600001:100:2026-04-30",
+        "replay_from_initial_positions": True,
+        "position_date": "2026-04-30",
+    }
+    replayed_positions = {"SH600002": {"shares": 200, "price": 10.0, "value": 2000.0}}
+    calls = {}
+
+    monkeypatch.setattr(
+        "quant_ex.run_scheduled_rebalance._trading_calendar",
+        lambda config: (calendar, calendar),
+    )
+    monkeypatch.setattr(
+        "quant_ex.run_scheduled_rebalance._resolve_cfg_start_date",
+        lambda base_cfg, signal_ts, trading_calendar: dict(base_cfg),
+    )
+    monkeypatch.setattr(
+        "quant_ex.run_scheduled_rebalance._apply_strategy_config",
+        lambda config, run_cfg: config,
+    )
+    monkeypatch.setattr(
+        "quant_ex.run_scheduled_rebalance._positions_start_date",
+        lambda positions, base_cfg, position_date: "2026-04-30",
+    )
+    monkeypatch.setattr(
+        "quant_ex.run_scheduled_rebalance._parse_positions_arg",
+        lambda positions, trade_date: {"SH600001": {"shares": 100, "price": 9.0, "value": 900.0}},
+    )
+    monkeypatch.setattr(
+        "quant_ex.run_scheduled_rebalance._replay_positions_from_initial",
+        lambda config, base_cfg, initial, initial_date, trade_date, trading_calendar: (
+            replayed_positions,
+            {"cum_pnl": 123.0},
+        ),
+    )
+
+    def fake_run_real_rebalance(
+        config,
+        run_cfg,
+        trade_date,
+        next_trade_date,
+        actual_positions=None,
+        trading_calendar=None,
+        pnl_carry=None,
+        display_portfolio_pnl=None,
+        return_details=False,
+    ):
+        calls.update(
+            {
+                "trade_date": trade_date,
+                "next_trade_date": next_trade_date,
+                "actual_positions": actual_positions,
+                "trading_calendar": trading_calendar,
+                "pnl_carry": pnl_carry,
+                "return_details": return_details,
+            }
+        )
+        return "report", {"executed_positions": actual_positions}
+
+    monkeypatch.setattr("quant_ex.run_scheduled_rebalance._run_real_rebalance", fake_run_real_rebalance)
+    monkeypatch.setattr("quant_ex.run_scheduled_rebalance._save_signal_cache", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        "quant_ex.run_scheduled_rebalance._load_latest_signal_cache",
+        lambda run_cfg: {"trade_date": "2026-05-19", "next_trade_date": "2026-05-20"},
+    )
+
+    _rebuild_signal_for_reminder(
+        config={},
+        cfg=cfg,
+        config_path=None,
+        today=pd.Timestamp("2026-05-20"),
+        force=False,
+        skip_update=True,
+        mock=False,
+    )
+
+    assert calls["trade_date"] == "2026-05-19"
+    assert calls["next_trade_date"] == "2026-05-20"
+    assert calls["actual_positions"] == replayed_positions
+    assert calls["pnl_carry"] == {"cum_pnl": 123.0}
+    assert calls["trading_calendar"] == calendar
+    assert calls["return_details"] is True

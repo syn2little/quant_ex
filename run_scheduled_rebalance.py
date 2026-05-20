@@ -142,6 +142,10 @@ def _daily_cfg(config: dict, args: argparse.Namespace) -> Dict[str, Any]:
         else float(cfg.get("min_action_value", 0))
     )
     cfg["position_date"] = args.position_date if args.position_date is not None else cfg.get("position_date")
+    cfg["positions"] = args.positions if args.positions is not None else cfg.get("positions")
+    cfg["replay_from_initial_positions"] = bool(
+        args.replay_from_initial_positions or cfg.get("replay_from_initial_positions", False)
+    )
     cfg["cache_dir"] = cfg.get("cache_dir") or "signals/daily_rebalance_cache"
     cfg["reminder_rebuild_on_miss"] = bool(
         cfg.get("reminder_rebuild_on_miss", True) and not args.no_reminder_rebuild
@@ -1600,12 +1604,62 @@ def _rebuild_signal_for_reminder(
     signal_ts = pd.Timestamp(signal_date).normalize()
     run_cfg = _resolve_cfg_start_date(cfg, signal_ts, trading_calendar)
     run_config = _apply_strategy_config(config, run_cfg)
-    report = (
-        _mock_report(run_cfg, signal_date, today_str)
-        if mock
-        else _run_real_rebalance(run_config, run_cfg, signal_date, today_str)
-    )
-    _save_signal_cache(run_cfg, signal_date, today_str, report, mock=mock)
+
+    details = None
+    if mock:
+        report = _mock_report(run_cfg, signal_date, today_str)
+    else:
+        actual_positions = None
+        pnl_carry = None
+        positions_arg = run_cfg.get("positions")
+        if run_cfg.get("replay_from_initial_positions"):
+            if not positions_arg:
+                raise ValueError("replay_from_initial_positions 需要提供 positions 起始持仓。")
+            initial_date = _positions_start_date(positions_arg, run_cfg, run_cfg.get("position_date"))
+            initial_positions = _parse_positions_arg(positions_arg, initial_date)
+            logger.info(
+                "提醒补救使用起始持仓回放: %s（起始日 %s）。",
+                list(initial_positions.keys()),
+                initial_date,
+            )
+            actual_positions, pnl_carry = _replay_positions_from_initial(
+                run_config,
+                run_cfg,
+                initial_positions,
+                initial_date,
+                signal_date,
+                list(trading_calendar),
+            )
+        elif positions_arg:
+            actual_positions = _parse_positions_arg(positions_arg, signal_date)
+            logger.info("提醒补救使用 positions 实际持仓: %s", list(actual_positions.keys()))
+
+        if not run_cfg.get("replay_from_initial_positions") and run_cfg.get("cache_roll_forward_positions", True):
+            cached_state = _load_executed_state_from_cache(run_cfg, signal_date, list(trading_calendar))
+            if cached_state is not None:
+                if actual_positions is not None:
+                    logger.info("提醒补救中上一条已执行缓存覆盖 positions。")
+                actual_positions = cached_state["positions"]
+                pnl_carry = cached_state.get("pnl_carry")
+                display_portfolio_pnl = cached_state.get("display_portfolio_pnl")
+            else:
+                display_portfolio_pnl = None
+        else:
+            display_portfolio_pnl = None
+
+        report, details = _run_real_rebalance(
+            run_config,
+            run_cfg,
+            signal_date,
+            today_str,
+            actual_positions,
+            list(trading_calendar),
+            pnl_carry=pnl_carry,
+            display_portfolio_pnl=display_portfolio_pnl,
+            return_details=True,
+        )
+
+    _save_signal_cache(run_cfg, signal_date, today_str, report, mock=mock, details=details)
     return _load_latest_signal_cache(run_cfg)
 
 

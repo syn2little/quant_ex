@@ -7,6 +7,7 @@ PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DAILY_SCRIPT="$PROJ/command/daily/csi1000_balanced_overlay_0428.sh"
 TARGET_DIR="$HOME/Library/LaunchAgents"
 LOG_DIR="$PROJ/logs"
+LAUNCHD_PATH="/opt/homebrew/bin:/usr/local/bin:$PROJ/.venv/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 mkdir -p "$TARGET_DIR" "$LOG_DIR"
 
 if [[ ! -x "$DAILY_SCRIPT" ]]; then
@@ -52,6 +53,8 @@ for ENTRY in "${AGENTS[@]}"; do
 
   <key>EnvironmentVariables</key>
   <dict>
+    <key>PATH</key>
+    <string>$LAUNCHD_PATH</string>
     <key>MPLCONFIGDIR</key>
     <string>/private/tmp/quant_ex_matplotlib</string>
   </dict>
