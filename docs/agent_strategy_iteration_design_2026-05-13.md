@@ -43,6 +43,7 @@ Implemented modules:
 - `agent/strategy_iteration/execution.py`: command proposals, risk tags, approval templates, command hash matching, execution summaries
 - `agent/strategy_iteration/agent_execution.py`: approved local coding-agent task proposals and Codex CLI execution scaffolding
 - `agent/strategy_iteration/evaluator.py`: backtest/WFV CSV feedback parsing
+- `agent/strategy_iteration/attribution.py`: Phase7 performance attribution report for control/candidate comparison and experiment-budget guidance
 - `run_agent_strategy_iteration.py`: CLI for planning, command proposal, approved execution, and feedback handoff
 - `/api/agents` and Web `Agent Runs` page: browse/create agent runs and regenerate approval templates
 - Discussion modes: default `sequential` preserves fixed role order; optional `meeting` lets a virtual chair select necessary roles and stop the discussion when enough evidence exists. Meeting runs have configurable caps for total rounds and roles per round.
@@ -64,6 +65,30 @@ Interpretation:
 - The strict csi1000 retrain candidate itself is not a promotion candidate.
 - The correct next use of the framework is a smaller, control-matched ablation or a return to the existing baseline control.
 - `docs/strategy_log/agent_runs/` is local/generated and ignored by default; durable conclusions belong in `strategy_iteration_log.csv`, `system_iteration_log.csv`, `config/strategy_candidates.yaml`, and concise Markdown summaries.
+
+## 1.2 Phase7 Status: 2026-05-18
+
+Phase7 adds performance attribution and experiment-budget control. The agent layer now has to diagnose the current bottleneck before proposing research spend.
+
+Implemented additions:
+
+- `agent/strategy_iteration/attribution.py` builds `attribution_report.json/md` for control/candidate comparisons.
+- `context.py` injects `artifact_summaries.performance_attribution` into every context pack when evidence is available.
+- `orchestrator.py` recognizes Phase7-style objectives and emits only one `primary_experiment` plus one `cheap_diagnostic`.
+- Run bundles save `attribution_report.*` next to `plan.md`.
+
+Current interpretation:
+
+- `adaptive_dd20_wf` is a stability base, not a return upgrade.
+- The current bottleneck is `return_repair`: recover return without losing 7/7 positive folds or drawdown advantage.
+- Phase7 is not itself alpha. Its contribution is valid only if it reduces wasted experiments and improves the next experiment choice.
+
+Contribution test:
+
+1. Compare a pre-Phase7 run and a Phase7 run for the same objective.
+2. Phase7 should remove broad infrastructure arms and repeated failed routes.
+3. Phase7 should identify the control, candidate, bottleneck, recommended primary experiment, and kill criteria.
+4. The following real experiment must either improve WFV metrics or be killed faster with less compute/research spend.
 
 ## 2. RD-Agent Design Analysis
 

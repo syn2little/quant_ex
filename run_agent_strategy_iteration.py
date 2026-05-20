@@ -11,6 +11,7 @@ from agent.strategy_iteration.agent_execution import (
     save_agent_approval_template,
     save_agent_task_plan,
 )
+from agent.strategy_iteration.attribution_inputs import assess_attribution_input_contract, contract_to_markdown
 from agent.strategy_iteration.evaluator import generate_feedback
 from agent.strategy_iteration.promotion_report import build_promotion_report
 from agent.strategy_iteration.execution import (
@@ -92,6 +93,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--control-csv", help="Optional control CSV for deltas.")
     parser.add_argument("--result-kind", default="auto", help="Result kind label, e.g. backtest or walk_forward.")
     parser.add_argument("--rank-metric", default=None, help="Optional rank metric override.")
+    parser.add_argument(
+        "--write-attribution-input-contract",
+        action="store_true",
+        help="Write a local attribution input contract report and exit.",
+    )
     return parser
 
 
@@ -102,6 +108,15 @@ def main(argv: list[str] | None = None) -> int:
         orchestrator.output_dir = Path(args.output_dir)
         if not orchestrator.output_dir.is_absolute():
             orchestrator.output_dir = orchestrator.root / orchestrator.output_dir
+
+    if args.write_attribution_input_contract:
+        report = assess_attribution_input_contract(orchestrator.root)
+        out_dir = orchestrator.root / "docs" / "strategy_log"
+        out_dir.mkdir(parents=True, exist_ok=True)
+        out_path = out_dir / "attribution_input_contract_latest.md"
+        out_path.write_text(contract_to_markdown(report), encoding="utf-8")
+        print(out_path)
+        return 0 if report.get("overall_status") != "blocked_missing_contract" else 2
 
     if args.feedback_run_id:
         if not args.result_csv:

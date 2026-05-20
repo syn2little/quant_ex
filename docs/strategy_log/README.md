@@ -10,13 +10,15 @@
 - `strategy_iteration_log.csv`：主表，按 `iteration_date` 升序维护。
 - `system_iteration_log.csv`：系统级迭代主表，记录全系统能力变化、基线范围、诊断评分和收敛状态。
 - `agent_memory.md`：多角色 agent 策略迭代的追加式 memory，用于保留计划摘要和 delayed feedback。
-- `agent_runs/`：agent run 的本地生成目录，包含 `run.json`、`plan.md`、`role_traces.*`、`commands.*`、`approval_template.yaml`、`feedback.*` 等。该目录默认 gitignored，不作为长期表格日志提交。
+- `agent_runs/`：agent run 的本地生成目录，包含 `run.json`、`plan.md`、`role_traces.*`、`commands.*`、`approval_template.yaml`、`feedback.*`、`attribution_report.*` 等。该目录默认 gitignored，不作为长期表格日志提交。
+- `system_diagnostic_YYYY-MM-DD_*.md`：系统级诊断与阶段总结。Phase7 之后，若 agent 改动只改善研究流程而未产生新策略读数，应记录在这里，而不是写入 `strategy_iteration_log.csv`。
 
 ## 维护规则
 
 - 每新增一个长期保留的策略配置，或对某个候选做出明确迭代结论，都应追加一行。
 - 不记录一次性的临时调试参数；只记录“值得后续比较或复用”的策略版本。
-- Agent planning 本身不等于策略结论。只有当训练/回测/WFV 结果改变长期决策面时，才追加 `strategy_iteration_log.csv`；否则保留在 `agent_memory.md` 和 run-local summary。
+- Agent planning 本身不等于策略结论。只有当训练/回测/WFV 结果改变长期决策面时，才追加 `strategy_iteration_log.csv`；否则保留在 `agent_memory.md`、`system_diagnostic_*.md` 和 run-local summary。
+- Phase7 起，agent 的贡献先按“研究预算贡献”验证：是否减少无效 arms、是否避免重复失败路线、是否把下一次实验限定为一个可 kill 的 primary experiment；不能把 planner 改动直接记作策略收益。
 - `config_path` 填相对路径；如果该策略没有独立配置文件，可填 `-`，并在 `notes` 中说明。
 - `result_source` 填支撑该条记录的文件，如 `optimization_results/...csv`、`...md`、`config/strategy_candidates.yaml`。
 - `next_ablation` 只写下一步最重要的一条，不要堆太多待办。
@@ -40,8 +42,17 @@
 
 ## 近期 Agent 结论
 
+### 2026-05-13 full-cycle validation
+
 - `full_agent_train_backtest_20260513` 已验证 agent→训练→回测→feedback 完整通路。
 - 严格主线为 csi1000 训练、csi300 评估、`topk=15/n_drop=3/hold_thresh=8`。
 - 回测结果为 Sharpe `1.2490`、IR `0.5774`、MaxDD `-20.86%`，弱于 `fundamental_control_15_3_8_20260511`。
 - Feedback decision 为 `reject/refuted`。该 run 是工作流验证，不是 durable strategy candidate，不应提升到 `strategy_iteration_log.csv`。
 - 同一 run 中较早的 `full_agent_train_backtest_20260513_same_model.csv` 使用了 `config/daily_csi1000.yaml`，而该文件当前 `market.name` 实际为 `csi300`；它是 superseded diagnostic，不作为主结论。
+
+### 2026-05-18 Phase7 attribution/budgeting
+
+- `phase7_agent_attribution_smoke` 验证 agent run bundle 会生成 `attribution_report.json/md`。
+- 当前 fallback attribution 来自 `config/strategy_candidates.yaml`：`adaptive_dd20_wf` 相对 `adaptive_baseline_wf` 的 mean Sharpe delta 为 `-0.0458`，worst drawdown delta 为 `+0.0437`，说明它是 stability base，不是 return upgrade。
+- 下一轮核心研究应是围绕 `adaptive_dd20_wf` 的 narrow return repair，并保持 7/7 positive folds 与 drawdown 优势。
+- Phase7 贡献必须用后续实验验证：如果它只是生成更漂亮的计划但没有减少无效实验或改善下一次实验选择，就不能算策略贡献。

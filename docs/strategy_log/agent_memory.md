@@ -150,3 +150,17 @@ NEXT_ABLATION:
 Return to the existing baseline control or design a smaller orthogonal ablation; do not rerun this exact strict csi1000 retrain as a promotion path.
 
 <!-- AGENT_MEMORY_END -->
+[2026-05-17T01:02:28 | next_agent_iteration_20260517 | ['phase1_control_bundle', 'phase1_prompt_context_layer', 'phase1_memory_layer', 'phase1_optional_llm_gateway']]
+
+DECISION:
+The recommended adaptation is a modular agentic planning layer, not a heavy autonomous trading system. It borrows RD-Agent's hypothesis-experiment-feedback trace and TradingAgents-ex's analyst/debate/risk/manager roles, then emits 4 controlled experiment arms for quant_ex's existing validation stack. 12 roles support continued research and 0 roles recommend rejection, with explicit approval gates for expensive or externally impactful work.
+
+APPROVED_ARMS:
+phase1_control_bundle, phase1_prompt_context_layer, phase1_memory_layer, phase1_optional_llm_gateway
+
+NEXT_ACTIONS:
+- Review the generated arms and choose one implementation target.
+- Implement only the chosen arm with disabled-by-default config where possible.
+- Run the validation ladder from cheapest to most expensive.
+
+<!-- AGENT_MEMORY_END -->

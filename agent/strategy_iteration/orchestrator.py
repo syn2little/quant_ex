@@ -7,6 +7,7 @@ from typing import Any, Callable, Dict, Iterable, Optional
 
 import yaml
 
+from .attribution import report_to_markdown
 from .context import build_project_context
 from .memory import StrategyAgentMemoryLog
 from .prompt_loader import load_prompt_catalog
@@ -139,7 +140,8 @@ class StrategyIterationOrchestrator:
         )
         now = datetime.now().strftime("%Y-%m-%d_%H%M%S")
         run_id = run_id or f"agent_strategy_{now}"
-        arms = self._build_experiment_arms(reports)
+        attribution = context.artifact_summaries.get("performance_attribution") or {}
+        arms = self._build_experiment_arms(reports, objective=objective, attribution=attribution)
         plan = StrategyIterationPlan(
             run_id=run_id,
             objective=objective,
@@ -238,6 +240,13 @@ class StrategyIterationOrchestrator:
             encoding="utf-8",
         )
         (run_dir / "discussion_trace.md").write_text(self._discussion_trace_to_markdown(run), encoding="utf-8")
+        attribution = run.context.artifact_summaries.get("performance_attribution") or {}
+        if attribution:
+            (run_dir / "attribution_report.json").write_text(
+                json.dumps(attribution, ensure_ascii=False, indent=2),
+                encoding="utf-8",
+            )
+            (run_dir / "attribution_report.md").write_text(report_to_markdown(attribution), encoding="utf-8")
         if append_memory:
             approved = [arm.arm_id for arm in run.plan.experiment_arms if not arm.requires_approval]
             StrategyAgentMemoryLog(self.memory_log_path).append_plan(run.plan, approved)
@@ -323,7 +332,56 @@ class StrategyIterationOrchestrator:
         return "\n".join(lines) + "\n"
 
     @staticmethod
-    def _build_experiment_arms(reports: list[RoleReport]) -> list[ExperimentArm]:
+    def _build_experiment_arms(
+        reports: list[RoleReport],
+        *,
+        objective: str = "",
+        attribution: dict[str, Any] | None = None,
+    ) -> list[ExperimentArm]:
+        attribution = attribution or {}
+        if _is_phase7_objective(objective):
+            recommended = attribution.get("recommended_primary_experiment") or (
+                "Use adaptive_dd20_wf as the stability base and run one return-repair diagnostic before WFV."
+            )
+            kill_criteria = attribution.get("kill_criteria") or [
+                "Kill if fold evidence does not identify a repairable return or stability bottleneck.",
+            ]
+            return [
+                ExperimentArm(
+                    arm_id="phase7_primary_attribution_experiment",
+                    hypothesis=recommended,
+                    change_type="primary_experiment",
+                    owner_role="research_portfolio_manager",
+                    target_files=["agent/strategy_iteration/attribution.py", "agent/strategy_iteration/context.py"],
+                    validation_commands=[
+                        "./.venv/bin/python run_agent_strategy_iteration.py --objective \"Phase 7 attribution smoke\" --no-llm --no-memory --discussion-mode meeting --meeting-max-rounds 3 --meeting-max-roles-per-round 2",
+                    ],
+                    success_criteria=[
+                        "attribution_report.json/md is written with adaptive_baseline_wf vs adaptive_dd20_wf evidence.",
+                        "Primary experiment is limited to one major variable and includes explicit kill criteria.",
+                        *kill_criteria,
+                    ],
+                    risk_notes=[
+                        "This is a planning and attribution iteration only; do not run full WFV without approval.",
+                        "Kill the experiment if the report shows mixed tradeoff with no clear repair target.",
+                    ],
+                ),
+                ExperimentArm(
+                    arm_id="phase7_cheap_diagnostic",
+                    hypothesis="Before spending WFV budget, inspect fold/year deltas to decide whether dd20 needs return repair or whether baseline needs stability repair.",
+                    change_type="cheap_diagnostic",
+                    owner_role="backtest_analyst",
+                    target_files=["docs/strategy_log/agent_runs/", "optimization_results/"],
+                    validation_commands=[
+                        "./.venv/bin/python -m pytest test/test_phase7_agent_attribution.py",
+                    ],
+                    success_criteria=[
+                        "Diagnostic remains local-only and does not fetch data, notify, trade, or run full WFV.",
+                        "Kill if available artifacts are missing or non-comparable.",
+                    ],
+                    risk_notes=["The diagnostic can guide research budget but is not promotion evidence."],
+                ),
+            ]
         return [
             ExperimentArm(
                 arm_id="phase1_control_bundle",
@@ -387,6 +445,7 @@ class StrategyIterationOrchestrator:
             ),
         ]
 
+
     @staticmethod
     def _synthesize(reports: list[RoleReport], arms: list[ExperimentArm]) -> str:
         supportive = [r for r in reports if _is_supportive_research_verdict(r.verdict)]
@@ -398,6 +457,11 @@ class StrategyIterationOrchestrator:
             f"{len(supportive)} roles support continued research and {len(rejecting)} roles recommend rejection, "
             "with explicit approval gates for expensive or externally impactful work."
         )
+
+
+def _is_phase7_objective(value: str) -> bool:
+    normalized = str(value or "").lower()
+    return "phase 7" in normalized or "phase7" in normalized or "performance attribution" in normalized or "experiment budgeting" in normalized
 
 
 def _normalize_verdict(value: str) -> str:
