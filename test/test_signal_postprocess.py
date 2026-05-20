@@ -101,6 +101,48 @@ def test_postprocess_signal_stock_vs_sector_filter():
     assert set(filtered.index.get_level_values("instrument")) == {"AAA", "CCC"}
 
 
+def test_stock_vs_sector_soft_filter_keep_top_pct_floor_preserves_more_candidates():
+    dates = pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"])
+    instruments = ["AAA", "BBB", "CCC", "DDD"]
+    price_idx = pd.MultiIndex.from_product(
+        [instruments, dates],
+        names=["instrument", "datetime"],
+    )
+    close = [
+        100.0, 110.0, 121.0,
+        100.0, 101.0, 102.01,
+        100.0, 100.0, 105.0,
+        100.0, 100.0, 90.0,
+    ]
+    price_data = pd.DataFrame({"real_close": close}, index=price_idx)
+    pred_idx = pd.MultiIndex.from_product(
+        [instruments, [pd.Timestamp("2024-01-03")]],
+        names=["instrument", "datetime"],
+    )
+    pred = pd.Series([0.4, 0.9, 0.3, 0.8], index=pred_idx)
+    config = {
+        "signal": {
+            "postprocess": {
+                "enabled": True,
+                "daily_transform": "none",
+                "stock_vs_sector_filter": {
+                    "enabled": True,
+                    "window": 2,
+                    "keep_top_pct": 0.25,
+                    "soft_keep_top_pct_floor": 0.5,
+                },
+            }
+        }
+    }
+    sector_map = {"AAA": "bank", "BBB": "bank", "CCC": "tech", "DDD": "tech"}
+
+    filtered = postprocess_signal(pred, config=config, sector_map=sector_map, price_data=price_data)
+
+    kept = set(filtered.index.get_level_values("instrument"))
+    assert len(kept) == 3
+    assert {"AAA", "CCC"}.issubset(kept)
+
+
 def test_postprocess_signal_stock_vs_sector_multiplicative_weight():
     """multiplicative_weight mode blends score with SVS rank instead of hard filtering."""
     dates = pd.to_datetime(["2024-01-01", "2024-01-02", "2024-01-03"])

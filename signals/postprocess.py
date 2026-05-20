@@ -463,6 +463,9 @@ def apply_stock_vs_sector_filter(
 
     window = int(cfg.get("window", 20))
     keep_top_pct = float(cfg.get("keep_top_pct", 0.4))
+    soft_floor = cfg.get("soft_keep_top_pct_floor", None)
+    if soft_floor is not None:
+        keep_top_pct = max(keep_top_pct, float(soft_floor))
     if not 0 < keep_top_pct <= 1:
         logger.warning(
             "stock_vs_sector_filter keep_top_pct=%s is invalid; skipped",
