@@ -1,0 +1,43 @@
+# Phase 8 transient-repair experiment: soften SVS hard filter to reduce missed winners.
+#
+# Diagnostic basis:
+#   docs/strategy_log/phase8_risk_transient_factor_attribution_v0_2026-05-19.md
+#
+# Guardrail: research-only same-model candidate. Not a trading config and not a
+# promotion signal without subsequent WFV evidence.
+
+market:
+  name: "csi300"
+  benchmark: "SH000300"
+
+strategy:
+  topk_dropout:
+    topk: 15
+    n_drop: 3
+    hold_thresh: 8
+  universe_filter:
+    exclude_kcb: true
+    exclude_list: []
+    min_price: 3
+    exclude_st: true
+    exclude_suspended: true
+
+signal:
+  postprocess:
+    enabled: true
+    daily_transform: "rank"
+    rank_pct: true
+    industry_neutralize: false
+    stock_vs_sector_filter:
+      enabled: true
+      window: 20
+      keep_top_pct: 0.4
+      # Narrow repair knob: preserve at least the top half by stock-vs-sector
+      # rank while keeping the original 0.4 setting visible for comparison.
+      soft_keep_top_pct_floor: 0.5
+
+experiment_guardrails:
+  research_only: true
+  diagnostic_source: "phase8_risk_transient_factor_attribution_v0"
+  no_full_wfv_without_approval: true
+  no_live_trading_or_notifications: true

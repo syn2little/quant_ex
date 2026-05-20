@@ -1,0 +1,38 @@
+# Phase 8 transient repair: regime-gated soft SVS threshold -0.08.
+#
+# Research-only threshold-grid candidate. Not a trading config.
+
+market:
+  name: "csi300"
+  benchmark: "SH000300"
+
+strategy:
+  topk_dropout:
+    topk: 15
+    n_drop: 3
+    hold_thresh: 8
+  universe_filter:
+    exclude_kcb: true
+    exclude_list: []
+    min_price: 3
+    exclude_st: true
+    exclude_suspended: true
+
+signal:
+  postprocess:
+    enabled: true
+    daily_transform: "rank"
+    rank_pct: true
+    industry_neutralize: false
+    stock_vs_sector_filter:
+      enabled: true
+      window: 20
+      keep_top_pct: 0.4
+      soft_keep_top_pct_floor: 0.5
+      drawdown_threshold: -0.08
+      drawdown_window: 120
+
+experiment_guardrails:
+  research_only: true
+  diagnostic_source: "phase8_regime_gated_svs_full_wfv_conclusion"
+  no_live_trading_or_notifications: true

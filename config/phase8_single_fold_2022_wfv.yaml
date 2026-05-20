@@ -1,0 +1,8 @@
+folds:
+  - name: test_2022
+    fit_start: "2015-01-01"
+    fit_end: "2020-12-31"
+    valid_start: "2021-01-01"
+    valid_end: "2021-12-31"
+    test_start: "2022-01-01"
+    test_end: "2022-12-31"

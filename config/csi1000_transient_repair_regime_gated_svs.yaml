@@ -1,0 +1,42 @@
+# Phase 8 transient repair: regime-gated soft SVS.
+#
+# Hypothesis: keep the soft SVS repair in normal markets, but fall back to the
+# base model signal during deeper market drawdowns to reduce 2022/2023-like
+# regime failures.
+#
+# Guardrail: research-only candidate. Not a trading config without WFV review.
+
+market:
+  name: "csi300"
+  benchmark: "SH000300"
+
+strategy:
+  topk_dropout:
+    topk: 15
+    n_drop: 3
+    hold_thresh: 8
+  universe_filter:
+    exclude_kcb: true
+    exclude_list: []
+    min_price: 3
+    exclude_st: true
+    exclude_suspended: true
+
+signal:
+  postprocess:
+    enabled: true
+    daily_transform: "rank"
+    rank_pct: true
+    industry_neutralize: false
+    stock_vs_sector_filter:
+      enabled: true
+      window: 20
+      keep_top_pct: 0.4
+      soft_keep_top_pct_floor: 0.5
+      drawdown_threshold: -0.10
+      drawdown_window: 120
+
+experiment_guardrails:
+  research_only: true
+  diagnostic_source: "phase8_soft_svs_full_wfv_conclusion"
+  no_live_trading_or_notifications: true
