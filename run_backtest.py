@@ -44,6 +44,7 @@ from quant_ex.backtest.engine import BacktestEngine
 from quant_ex.backtest.grid_search import GridSearchBacktest
 from quant_ex.backtest.metrics import format_metrics
 from quant_ex.backtest.signal_diagnostics import compute_signal_ic
+from quant_ex.agent.strategy_iteration.attribution_input_export import export_attribution_inputs as write_attribution_inputs
 from quant_ex.signals.postprocess import postprocess_requires_price_data, postprocess_signal
 from quant_ex.strategy.regime_switch import apply_overlay_gating
 
@@ -99,6 +100,8 @@ def main(
     min_cost: float = None,
     slippage_sensitivity: bool = False,
     slippage_multipliers: list = None,
+    export_attribution_inputs: bool = False,
+    run_id: str = None,
 ):
     config = load_config(config_path)
     today = datetime.now().strftime("%Y-%m-%d")
@@ -278,12 +281,10 @@ def main(
             print("\n最优参数详细指标:")
             print(format_metrics(m))
 
-        # CAP-13: Slippage sensitivity analysis
-        if slippage_sensitivity and not results_df.empty:
-            best_params = GridSearchBacktest.best_params(results_df)
-            _run_slippage_sensitivity(
-                engine=engine,
-                pred_by_market={m: _predict_for_market(
+        pred_by_market = None
+        if (slippage_sensitivity or export_attribution_inputs) and not results_df.empty:
+            pred_by_market = {
+                m: _predict_for_market(
                     model=model,
                     data_loader=data_loader,
                     universe_filter=universe_filter,
@@ -293,13 +294,107 @@ def main(
                     start=start,
                     end=end,
                     today=today,
-                ) for m in eval_markets},
+                )
+                for m in eval_markets
+            }
+
+        # CAP-13: Slippage sensitivity analysis
+        if slippage_sensitivity and not results_df.empty:
+            best_params = GridSearchBacktest.best_params(results_df)
+            _run_slippage_sensitivity(
+                engine=engine,
+                pred_by_market=pred_by_market,
                 best_params=best_params,
                 config=config,
                 start=start,
                 end=end,
                 multipliers=slippage_multipliers or [0.0, 0.25, 0.5, 1.0, 1.5, 2.0, 3.0, 5.0],
             )
+
+        if export_attribution_inputs and not results_df.empty:
+            _export_best_attribution_inputs(
+                engine=engine,
+                pred_by_market=pred_by_market,
+                data_loader=data_loader,
+                best_params=GridSearchBacktest.best_params(results_df),
+                config=config,
+                output_dir=out_dir / "agent_runs",
+                run_id=run_id or f"backtest_{datetime.now().strftime('%Y%m%d_%H%M%S')}",
+                start=start,
+                end=end,
+                today=today,
+                market=eval_markets[0] if eval_markets else base_market,
+                benchmark=benchmark,
+                deal_price=deal_price,
+                open_cost=open_cost,
+                close_cost=close_cost,
+                min_cost=min_cost,
+            )
+
+
+def _export_best_attribution_inputs(
+    engine,
+    pred_by_market: dict,
+    data_loader: DataLoader,
+    best_params: dict,
+    config: dict,
+    output_dir: Path,
+    run_id: str,
+    start: str = None,
+    end: str = None,
+    today: str = None,
+    market: str = None,
+    benchmark: str = None,
+    deal_price: str = None,
+    open_cost: float = None,
+    close_cost: float = None,
+    min_cost: float = None,
+) -> dict[str, Path]:
+    """Run the best local backtest once more and export agent attribution contracts."""
+
+    if not pred_by_market:
+        return {}
+    market = market or next(iter(pred_by_market))
+    pred = pred_by_market.get(market) if market in pred_by_market else next(iter(pred_by_market.values()))
+    strategy_params = {
+        "topk": int(best_params.get("topk", 10)),
+        "n_drop": int(best_params.get("n_drop", 3)),
+        "hold_thresh": int(best_params.get("hold_thresh", 5)),
+    }
+    backtest_kwargs = {
+        key: value
+        for key, value in {
+            "benchmark": benchmark,
+            "deal_price": deal_price,
+            "open_cost": open_cost,
+            "close_cost": close_cost,
+            "min_cost": min_cost,
+        }.items()
+        if value is not None
+    }
+    report, _ = engine.run(
+        pred=pred,
+        strategy_params=strategy_params,
+        start_time=start,
+        end_time=end,
+        **backtest_kwargs,
+    )
+    tcfg = config.get("training", {})
+    price_data = data_loader.load_price_data(
+        instruments=market,
+        start_time=start or tcfg.get("test_start", "2024-01-01"),
+        end_time=end or today,
+    )
+    written = write_attribution_inputs(
+        run_id=run_id,
+        output_dir=output_dir,
+        report=report,
+        signal=pred,
+        price_data=price_data,
+        topk=strategy_params["topk"],
+    )
+    logger.info("Attribution inputs exported → %s", ", ".join(str(path) for path in written.values()))
+    return written
 
 
 def _run_slippage_sensitivity(
@@ -574,6 +669,17 @@ if __name__ == "__main__":
         default=None,
         help="滑点倍数列表（逗号分隔），默认 0,0.25,0.5,1,1.5,2,3,5",
     )
+    parser.add_argument(
+        "--export-attribution-inputs",
+        action="store_true",
+        help="可选导出 agent attribution 输入契约文件到 backtest_results/agent_runs（默认关闭）。",
+    )
+    parser.add_argument(
+        "--run-id",
+        type=str,
+        default=None,
+        help="导出 attribution inputs 时使用的 run id（默认自动生成 backtest_{timestamp}）。",
+    )
     args = parser.parse_args()
 
     main(
@@ -602,4 +708,6 @@ if __name__ == "__main__":
             [float(x) for x in args.slippage_multipliers.split(",")]
             if args.slippage_multipliers else None
         ),
+        export_attribution_inputs=args.export_attribution_inputs,
+        run_id=args.run_id,
     )

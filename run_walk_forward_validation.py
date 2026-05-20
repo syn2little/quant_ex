@@ -410,6 +410,8 @@ def _run_one_fold_universe(
     ]
     if args.seeds:
         backtest_cmd.append("--seeds")
+    if getattr(args, "export_attribution_inputs", False):
+        backtest_cmd.extend(["--export-attribution-inputs", "--run-id", tag])
     run_command(backtest_cmd, logs_dir / f"{tag}_backtest.log")
 
     # run_backtest.py wrote directly to `dest` via --output-csv; read it.
@@ -582,6 +584,11 @@ def main(argv: Iterable[str] | None = None) -> None:
         action="store_true",
         help="Allow run_train.py to compute factors from the generated fold config. "
              "Default keeps historical WFV behavior by passing --no-extra-factors.",
+    )
+    parser.add_argument(
+        "--export-attribution-inputs",
+        action="store_true",
+        help="Opt-in: ask each fold backtest to export attribution inputs using a fold-scoped run id.",
     )
     args = parser.parse_args(list(argv) if argv is not None else None)
 
