@@ -6,6 +6,8 @@ from typing import Any, Dict, List
 
 import yaml
 
+from .attribution import build_strategy_attribution_report
+from .attribution_inputs import assess_attribution_input_contract
 from .schemas import StrategyProjectContext
 
 
@@ -220,6 +222,77 @@ def build_research_constraints(
     }
 
 
+def _build_candidate_summary_attribution(root: Path) -> Dict[str, Any]:
+    candidates = _load_yaml(root / "config" / "strategy_candidates.yaml").get("candidates", {})
+    control = candidates.get("csi1000_adaptive_dd20", {})
+    baseline = candidates.get("csi1000_balanced", {})
+    control_wf = (baseline.get("walk_forward") or {}) if isinstance(baseline, dict) else {}
+    candidate_wf = (control.get("walk_forward") or {}) if isinstance(control, dict) else {}
+    if not candidate_wf:
+        return {}
+    mean_delta = float(candidate_wf.get("mean_sharpe") or 0) - float(control_wf.get("mean_sharpe") or 0)
+    dd_delta = float(candidate_wf.get("worst_max_drawdown") or 0) - float(control_wf.get("worst_max_drawdown") or 0)
+    return {
+        "run_id": "context_candidate_summary_attribution",
+        "control_id": "adaptive_baseline_wf",
+        "candidate_id": "adaptive_dd20_wf",
+        "source": "config/strategy_candidates.yaml",
+        "fold_deltas": {},
+        "summary": {
+            "folds_compared": int(candidate_wf.get("folds") or 0),
+            "improved_folds": [],
+            "hurt_folds": [],
+            "mean_sharpe_delta": round(mean_delta, 6),
+            "worst_drawdown_delta": round(dd_delta, 6),
+            "positive_sharpe_folds": candidate_wf.get("positive_sharpe_folds"),
+        },
+        "bottleneck": "return_repair" if mean_delta < 0 and dd_delta >= 0 else "mixed_tradeoff",
+        "recommended_primary_experiment": "Use adaptive_dd20_wf as the stability base and test one narrow return-repair diagnostic before any new WFV.",
+        "kill_criteria": [
+            "Kill if return repair worsens the all-positive fold property.",
+            "Kill if drawdown advantage versus the baseline disappears.",
+        ],
+    }
+
+
+def _load_external_knowledge_context(root: Path) -> Dict[str, Any]:
+    path = root / "docs" / "strategy_log" / "knowledge_scout" / "latest_agent_context.md"
+    if not path.exists():
+        return {}
+    text = path.read_text(encoding="utf-8").strip()
+    if not text:
+        return {}
+    lines = [line.strip() for line in text.splitlines()]
+    top_ideas = [line[3:].strip() for line in lines if line.startswith("## ")]
+    return {
+        "path": str(path.relative_to(root)),
+        "top_ideas": top_ideas[:5],
+        "summary": "\n".join(lines[:80]),
+        "guardrails": [
+            "External knowledge is hypothesis input only, not promotion evidence.",
+            "Do not ingest external market/fundamental time-series data through knowledge_scout.",
+            "Local validation, Phase7 attribution, and human approval remain binding.",
+        ],
+    }
+
+
+def _build_default_performance_attribution(root: Path) -> Dict[str, Any]:
+    control = root / "optimization_results" / "walk_forward_adaptive_baseline_wf" / "walk_forward_summary.csv"
+    candidate = root / "optimization_results" / "walk_forward_adaptive_dd20_wf" / "walk_forward_summary.csv"
+    if not control.exists() or not candidate.exists():
+        return _build_candidate_summary_attribution(root)
+    try:
+        return build_strategy_attribution_report(
+            run_id="context_default_performance_attribution",
+            control_csv=control,
+            candidate_csv=candidate,
+            control_id="adaptive_baseline_wf",
+            candidate_id="adaptive_dd20_wf",
+        )
+    except Exception as exc:
+        return {"error": str(exc), "control_id": "adaptive_baseline_wf", "candidate_id": "adaptive_dd20_wf"}
+
+
 def build_project_context(
     objective: str,
     *,
@@ -252,6 +325,13 @@ def build_project_context(
             for item in context.available_artifacts["recent_backtests"][:5]
         ],
     }
+    attribution = _build_default_performance_attribution(root)
+    if attribution:
+        context.artifact_summaries["performance_attribution"] = attribution
+    context.artifact_summaries["attribution_input_contract"] = assess_attribution_input_contract(root)
+    external_knowledge = _load_external_knowledge_context(root)
+    if external_knowledge:
+        context.artifact_summaries["external_knowledge_scout"] = external_knowledge
     context.config_summaries = {
         item: _summarize_config(root / item)
         for item in context.available_artifacts["config_candidates"][:8]

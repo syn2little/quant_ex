@@ -1,0 +1,115 @@
+# External knowledge scout configuration.
+# Research-only: collect strategy/model/quant ideas, not market/fundamental data.
+
+language: zh
+max_items_per_source: 8
+raw_cache_dir: cache/knowledge_scout
+output_dir: docs/strategy_log/knowledge_scout
+latest_context_path: docs/strategy_log/knowledge_scout/latest_agent_context.md
+
+filters:
+  include_keywords:
+    - factor
+    - anomaly
+    - cross-sectional
+    - portfolio
+    - risk model
+    - time series
+    - transformer
+    - regime
+    - drawdown
+    - execution
+    - backtest
+    - alpha
+    - stock returns
+  exclude_keywords:
+    - intraday tick data
+    - order book dataset
+    - fundamentals database
+    - earnings estimate feed
+    - price api
+    - crypto-only scalping
+
+sources:
+  - name: arxiv_qfin_pm
+    source_type: arxiv
+    enabled: true
+    tier: 1
+    query: "cat:q-fin.PM OR cat:q-fin.ST OR cat:q-fin.TR"
+    max_items: 8
+    keywords:
+      - portfolio
+      - factor
+      - stock returns
+      - risk model
+      - market regime
+
+  - name: arxiv_ml_finance
+    source_type: arxiv
+    enabled: true
+    tier: 1
+    query: "all:finance AND (cat:cs.LG OR cat:stat.ML)"
+    max_items: 8
+    keywords:
+      - time series
+      - transformer
+      - stock prediction
+      - portfolio optimization
+      - cross-sectional
+
+  - name: quantpedia_blog
+    source_type: rss
+    enabled: true
+    tier: 1
+    url: https://quantpedia.com/blog/feed/
+    max_items: 8
+
+  - name: alpha_architect
+    source_type: rss
+    enabled: true
+    tier: 1
+    url: https://alphaarchitect.com/feed/
+    max_items: 8
+
+  - name: quantocracy
+    source_type: rss
+    enabled: true
+    tier: 1
+    url: https://quantocracy.com/feed/
+    max_items: 8
+
+  - name: robot_wealth
+    source_type: rss
+    enabled: true
+    tier: 1
+    url: https://robotwealth.com/feed/
+    max_items: 8
+
+  - name: papers_with_backtest
+    source_type: html_index
+    enabled: true
+    tier: 1
+    url: https://paperswithbacktest.com/
+    max_items: 8
+
+optional_sources:
+  - name: semantic_scholar
+    source_type: semantic_scholar
+    enabled: false
+    tier: 2
+    note: "Optional citation enrichment; unauthenticated calls may hit 429."
+  - name: x_search
+    source_type: x_search
+    enabled: false
+    tier: 2
+    note: "Weak signal only; requires XAI_API_KEY and corroboration."
+  - name: youtube_transcripts
+    source_type: youtube
+    enabled: false
+    tier: 2
+    note: "Transcript extraction for selected quant talks/interviews."
+  - name: github_repos
+    source_type: github
+    enabled: false
+    tier: 2
+    note: "Implementation discovery only; license/security review required."
