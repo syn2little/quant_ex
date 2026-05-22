@@ -1,38 +1,38 @@
-# Latest External Knowledge Context (2026-05-19)
+# Latest External Knowledge Context (2026-05-22)
 
 Use these as weak-to-medium research hypotheses. Phase7 attribution and local validation remain binding.
 
-## Dynamic Elliptical Graph Factor Models via Riemannian Optimization with Geodesic Temporal Regularization
-- Source: arxiv_ml_finance (arxiv) <https://arxiv.org/abs/2605.18316v1>
-- Recommended action: prototype
-- Fit/Evidence/Novelty: 5/4/4
-- Mechanism: Potential factor/anomaly mechanism that may translate into feature engineering or candidate filters.
-- Local mapping: features/ or features/library/: candidate feature or factor diagnostic; backtest/ and strategy/: portfolio construction, regime, or risk overlay diagnostic
-
-## Deep Reinforcement Learning Framework for Diversified Portfolio Management Across Global Equity Markets
-- Source: arxiv_qfin_pm (arxiv) <https://arxiv.org/abs/2605.17307v1>
-- Recommended action: prototype
-- Fit/Evidence/Novelty: 5/4/4
-- Mechanism: Risk-aware portfolio construction or drawdown control may improve stability before return repair.
-- Local mapping: models/: optional model architecture or training objective prototype; backtest/ and strategy/: portfolio construction, regime, or risk overlay diagnostic
-
-## Scale-Equivariant Generative Forecasting: Weight-Tied Dilated Convolutions, Wavelet Scattering Inputs, and Spectral-Consistency Training for Self-Similar Time Series
-- Source: arxiv_ml_finance (arxiv) <https://arxiv.org/abs/2605.17582v1>
-- Recommended action: prototype
-- Fit/Evidence/Novelty: 5/4/4
-- Mechanism: Potential factor/anomaly mechanism that may translate into feature engineering or candidate filters.
-- Local mapping: features/ or features/library/: candidate feature or factor diagnostic; models/: optional model architecture or training objective prototype
-
-## Geometric Observables for Financial Regime Detection
-- Source: arxiv_qfin_pm (arxiv) <https://arxiv.org/abs/2605.17117v1>
+## An Index of Commodity Futures Returns Since 1871
+- Source: quantpedia_blog (rss) <https://quantpedia.com/an-index-of-commodity-futures-returns-since-1871/>
 - Recommended action: summarize
-- Fit/Evidence/Novelty: 3/4/4
+- Fit/Evidence/Novelty: 5/3/4
 - Mechanism: Risk-aware portfolio construction or drawdown control may improve stability before return repair.
 - Local mapping: backtest/ and strategy/: portfolio construction, regime, or risk overlay diagnostic
 
-## A Penalty-Free Pipeline for Direct Quantum-Annealer Portfolio Optimization
-- Source: arxiv_qfin_pm (arxiv) <https://arxiv.org/abs/2605.17628v1>
+## Commodity Portfolio Strategy for a Potential 2026 Inflationary and Supply Shock Regime
+- Source: quantpedia_blog (rss) <https://quantpedia.com/commodity-portfolio-strategy-for-a-potential-2026-inflationary-and-supply-shock-regime/>
 - Recommended action: summarize
-- Fit/Evidence/Novelty: 3/4/3
+- Fit/Evidence/Novelty: 5/3/4
+- Mechanism: Potential factor/anomaly mechanism that may translate into feature engineering or candidate filters.
+- Local mapping: features/ or features/library/: candidate feature or factor diagnostic; backtest/ and strategy/: portfolio construction, regime, or risk overlay diagnostic
+
+## The Attention Factor: The Link That Connects Crypto and Public Equity Markets
+- Source: quantpedia_blog (rss) <https://quantpedia.com/the-attention-factor-the-link-that-connects-crypto-and-public-equity-markets/>
+- Recommended action: summarize
+- Fit/Evidence/Novelty: 5/3/4
+- Mechanism: Risk-aware portfolio construction or drawdown control may improve stability before return repair.
+- Local mapping: features/ or features/library/: candidate feature or factor diagnostic; backtest/ and strategy/: portfolio construction, regime, or risk overlay diagnostic
+
+## A Century Without Data: Reconstructing Emerging Markets Equity History
+- Source: quantpedia_blog (rss) <https://quantpedia.com/a-century-without-data-reconstructing-emerging-markets-equity-history/>
+- Recommended action: summarize
+- Fit/Evidence/Novelty: 3/3/3
+- Mechanism: External research mechanism requires manual interpretation before local validation.
+- Local mapping: backtest/ and strategy/: portfolio construction, regime, or risk overlay diagnostic
+
+## Dual Momentum Allocation Between Physical Gold and Bitcoin (Digital Gold)
+- Source: quantpedia_blog (rss) <https://quantpedia.com/dual-momentum-allocation-between-physical-gold-and-bitcoin-digital-gold/>
+- Recommended action: watch
+- Fit/Evidence/Novelty: 3/3/3
 - Mechanism: Risk-aware portfolio construction or drawdown control may improve stability before return repair.
 - Local mapping: backtest/ and strategy/: portfolio construction, regime, or risk overlay diagnostic
