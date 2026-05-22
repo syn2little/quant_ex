@@ -196,7 +196,7 @@ def _csv_column_values(path: Path, column: str) -> set[str]:
     try:
         with path.open("r", encoding="utf-8-sig", newline="") as handle:
             reader = csv.DictReader(handle)
-            return {str(row.get(column, "")).strip() for row in reader if row.get(column, "") != ""}
+            return {str(row.get(column, "")).strip() for row in reader}
     except Exception:
         return set()
 

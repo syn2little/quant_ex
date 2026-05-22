@@ -96,6 +96,35 @@ def test_attribution_input_contract_rejects_non_diagnostic_risk_cap_labels(tmp_p
     assert report["next_action"] == "implement_risk_transient_factor_attribution_v0"
 
 
+def test_attribution_input_contract_rejects_blank_risk_cap_labels(tmp_path):
+    write_csv(
+        tmp_path / "backtest_results" / "portfolio_returns.csv",
+        "date,portfolio_return,benchmark_return\n2026-01-01,0.01,0.004\n",
+    )
+    write_csv(
+        tmp_path / "backtest_results" / "risk_exposures.csv",
+        "date,portfolio_return,benchmark_return\n2026-01-01,0.01,0.004\n",
+    )
+    write_csv(
+        tmp_path / "backtest_results" / "unit_risk_cap_counterfactual.csv",
+        "date,state,multiplier,pre_cap_return,post_cap_return,decision_label\n"
+        "2026-01-01,cut,0.5,-0.02,-0.01,diagnostic_only\n"
+        "2026-01-02,cut,0.5,-0.03,-0.015,\n",
+    )
+    write_csv(
+        tmp_path / "backtest_results" / "unit_risk_cap_summary.csv",
+        "fold_id,candidate_id,decision_label,baseline_max_drawdown,capped_max_drawdown\n"
+        "unit,unit,diagnostic_only,-0.2,-0.1\n",
+    )
+
+    report = assess_attribution_input_contract(tmp_path)
+
+    assert report["requirements"]["risk_cap_counterfactual"]["status"] == "ready"
+    assert report["requirements"]["risk_cap_summary"]["status"] == "ready"
+    assert report["optional_capabilities"]["risk_cap_counterfactual"]["status"] == "invalid_decision_label"
+    assert report["next_action"] == "implement_risk_transient_factor_attribution_v0"
+
+
 def test_attribution_input_contract_blocks_when_required_columns_are_missing(tmp_path):
     write_csv(
         tmp_path / "backtest_results" / "portfolio_returns.csv",

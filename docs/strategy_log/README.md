@@ -29,7 +29,7 @@
 - `parent_strategy_id`：本次迭代基于哪个父策略演化而来。
 - `iteration_date`：做出本轮结论的日期，而不是训练开始日期。
 - `stage`：如 `baseline`、`overlay`、`candidate`、`retired`、`promoted`。
-- `decision`：如 `keep`、`compare_next`、`fallback`、`do_not_promote`。
+- `decision`：如 `keep`、`compare_next`、`diagnostic_only`、`not_promotable`、`manual-approval-required`。
 - `notes`：一句话总结本轮读数。
 - `next_ablation`：下一轮最关键的对照实验方向。
 
@@ -66,7 +66,7 @@
 - 继续围绕 `gate_m008` 或 SVS threshold 做细粒度微调：当前视为高过拟合风险路线，不应作为下一轮主线。
 - 仅凭同模型或单折读数推广策略：不满足项目 promotion 证据标准。
 
-### Manual approval required
+### Manual-approval-required
 
 - 完整 WFV、市场数据刷新、daily/default 配置替换、launchd/定时任务修改、真实通知或任何 rebalance-like side effect。
 
