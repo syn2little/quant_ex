@@ -101,6 +101,7 @@ def main(
     slippage_sensitivity: bool = False,
     slippage_multipliers: list = None,
     export_attribution_inputs: bool = False,
+    export_risk_cap_diagnostics: bool = False,
     run_id: str = None,
 ):
     config = load_config(config_path)
@@ -329,6 +330,7 @@ def main(
                 open_cost=open_cost,
                 close_cost=close_cost,
                 min_cost=min_cost,
+                export_risk_cap_diagnostics=export_risk_cap_diagnostics,
             )
 
 
@@ -349,6 +351,7 @@ def _export_best_attribution_inputs(
     open_cost: float = None,
     close_cost: float = None,
     min_cost: float = None,
+    export_risk_cap_diagnostics: bool = False,
 ) -> dict[str, Path]:
     """Run the best local backtest once more and export agent attribution contracts."""
 
@@ -392,6 +395,7 @@ def _export_best_attribution_inputs(
         signal=pred,
         price_data=price_data,
         topk=strategy_params["topk"],
+        export_risk_cap_diagnostics=export_risk_cap_diagnostics,
     )
     logger.info("Attribution inputs exported → %s", ", ".join(str(path) for path in written.values()))
     return written
@@ -675,12 +679,19 @@ if __name__ == "__main__":
         help="可选导出 agent attribution 输入契约文件到 backtest_results/agent_runs（默认关闭）。",
     )
     parser.add_argument(
+        "--export-risk-cap-diagnostics",
+        action="store_true",
+        help="随 attribution inputs 额外导出 diagnostic-only risk-cap counterfactual 文件（默认关闭）。",
+    )
+    parser.add_argument(
         "--run-id",
         type=str,
         default=None,
         help="导出 attribution inputs 时使用的 run id（默认自动生成 backtest_{timestamp}）。",
     )
     args = parser.parse_args()
+    if args.export_risk_cap_diagnostics and not args.export_attribution_inputs:
+        parser.error("--export-risk-cap-diagnostics requires --export-attribution-inputs")
 
     main(
         config_path=args.config,
@@ -709,5 +720,6 @@ if __name__ == "__main__":
             if args.slippage_multipliers else None
         ),
         export_attribution_inputs=args.export_attribution_inputs,
+        export_risk_cap_diagnostics=args.export_risk_cap_diagnostics,
         run_id=args.run_id,
     )

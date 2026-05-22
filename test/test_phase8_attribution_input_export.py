@@ -3,6 +3,7 @@ import pandas as pd
 from agent.strategy_iteration.attribution_input_export import (
     build_candidate_events,
     build_portfolio_returns,
+    build_risk_cap_diagnostics,
     build_risk_exposures,
     export_attribution_inputs,
 )
@@ -62,6 +63,26 @@ def test_build_candidate_events_from_signal_and_prices():
     assert "forward_return" in events.columns
 
 
+def test_build_risk_cap_diagnostics_uses_lagged_inputs_only():
+    portfolio_returns = pd.DataFrame(
+        {
+            "date": ["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04"],
+            "portfolio_return": [0.02, -0.04, 0.03, -0.02],
+            "benchmark_return": [0.01, -0.01, 0.0, -0.005],
+        }
+    )
+
+    rows, summary = build_risk_cap_diagnostics(portfolio_returns, run_id="unit", rolling_window=2)
+
+    assert list(rows["date"]) == list(portfolio_returns["date"])
+    assert rows.loc[0, "lagged_vol"] != rows.loc[0, "lagged_vol"]
+    assert rows.loc[0, "lagged_drawdown"] != rows.loc[0, "lagged_drawdown"]
+    assert rows.loc[2, "lagged_drawdown"] == (1.02 * 0.96) / 1.02 - 1.0
+    assert set(["state", "multiplier", "pre_cap_return", "post_cap_return", "decision_label"]).issubset(rows.columns)
+    assert set(summary["decision_label"]) == {"diagnostic_only"}
+    assert summary.loc[0, "candidate_id"] == "unit"
+
+
 def test_export_attribution_inputs_writes_contract_ready_files(tmp_path):
     report = pd.DataFrame(
         {"return": [0.02, -0.01], "cost": [0.0, 0.0], "bench": [0.01, -0.005]},
@@ -73,5 +94,32 @@ def test_export_attribution_inputs_writes_contract_ready_files(tmp_path):
 
     assert written["portfolio_returns"].exists()
     assert written["risk_exposures"].exists()
+    assert "risk_cap_counterfactual" not in written
     assert contract["requirements"]["portfolio_returns"]["status"] == "ready"
     assert contract["requirements"]["risk_exposures"]["status"] == "ready"
+
+
+def test_export_attribution_inputs_optionally_writes_risk_cap_diagnostics(tmp_path):
+    report = pd.DataFrame(
+        {
+            "return": [0.02, -0.04, 0.03, -0.02],
+            "cost": [0.0, 0.0, 0.0, 0.0],
+            "bench": [0.01, -0.01, 0.0, -0.005],
+        },
+        index=pd.to_datetime(["2026-01-01", "2026-01-02", "2026-01-03", "2026-01-04"]),
+    )
+
+    written = export_attribution_inputs(
+        run_id="unit",
+        output_dir=tmp_path / "backtest_results" / "agent_runs",
+        report=report,
+        export_risk_cap_diagnostics=True,
+        risk_cap_rolling_window=2,
+    )
+
+    assert written["risk_cap_counterfactual"].exists()
+    assert written["risk_cap_summary"].exists()
+    rows = pd.read_csv(written["risk_cap_counterfactual"])
+    summary = pd.read_csv(written["risk_cap_summary"])
+    assert set(["state", "multiplier", "pre_cap_return", "post_cap_return", "decision_label"]).issubset(rows.columns)
+    assert set(summary["decision_label"]) == {"diagnostic_only"}

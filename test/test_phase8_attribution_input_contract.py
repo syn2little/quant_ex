@@ -32,6 +32,67 @@ def test_attribution_input_contract_detects_ready_local_artifacts(tmp_path):
     assert report["requirements"]["portfolio_returns"]["status"] == "ready"
     assert report["requirements"]["risk_exposures"]["status"] == "ready"
     assert report["requirements"]["candidate_events"]["status"] == "ready"
+    assert report["requirements"]["risk_cap_counterfactual"]["status"] == "missing_artifact"
+    assert report["optional_capabilities"]["risk_cap_counterfactual"]["status"] == "missing_optional_artifact"
+    assert report["next_action"] == "implement_risk_transient_factor_attribution_v0"
+
+
+def test_attribution_input_contract_detects_optional_risk_cap_diagnostics(tmp_path):
+    write_csv(
+        tmp_path / "backtest_results" / "portfolio_returns.csv",
+        "date,portfolio_return,benchmark_return\n2026-01-01,0.01,0.004\n",
+    )
+    write_csv(
+        tmp_path / "backtest_results" / "risk_exposures.csv",
+        "date,portfolio_return,benchmark_return\n2026-01-01,0.01,0.004\n",
+    )
+    write_csv(
+        tmp_path / "backtest_results" / "unit_risk_cap_counterfactual.csv",
+        "date,state,multiplier,pre_cap_return,post_cap_return,decision_label\n2026-01-01,cut,0.5,-0.02,-0.01,diagnostic_only\n",
+    )
+    write_csv(
+        tmp_path / "backtest_results" / "unit_risk_cap_summary.csv",
+        "fold_id,candidate_id,decision_label,baseline_max_drawdown,capped_max_drawdown\nunit,unit,diagnostic_only,-0.2,-0.1\n",
+    )
+
+    report = assess_attribution_input_contract(tmp_path)
+    markdown = contract_to_markdown(report)
+
+    assert report["overall_status"] == "ready_for_transient_only"
+    assert report["requirements"]["risk_cap_counterfactual"]["status"] == "ready"
+    assert report["requirements"]["risk_cap_summary"]["status"] == "ready"
+    assert report["optional_capabilities"]["risk_cap_counterfactual"] == {
+        "status": "ready",
+        "decision_label": "diagnostic_only",
+        "promotion_evidence": False,
+    }
+    assert report["next_action"] == "review_risk_cap_counterfactual_diagnostic"
+    assert "Promotion evidence: False" in markdown
+
+
+def test_attribution_input_contract_rejects_non_diagnostic_risk_cap_labels(tmp_path):
+    write_csv(
+        tmp_path / "backtest_results" / "portfolio_returns.csv",
+        "date,portfolio_return,benchmark_return\n2026-01-01,0.01,0.004\n",
+    )
+    write_csv(
+        tmp_path / "backtest_results" / "risk_exposures.csv",
+        "date,portfolio_return,benchmark_return\n2026-01-01,0.01,0.004\n",
+    )
+    write_csv(
+        tmp_path / "backtest_results" / "unit_risk_cap_counterfactual.csv",
+        "date,state,multiplier,pre_cap_return,post_cap_return,decision_label\n2026-01-01,cut,0.5,-0.02,-0.01,compare_next\n",
+    )
+    write_csv(
+        tmp_path / "backtest_results" / "unit_risk_cap_summary.csv",
+        "fold_id,candidate_id,decision_label,baseline_max_drawdown,capped_max_drawdown\nunit,unit,compare_next,-0.2,-0.1\n",
+    )
+
+    report = assess_attribution_input_contract(tmp_path)
+
+    assert report["requirements"]["risk_cap_counterfactual"]["status"] == "ready"
+    assert report["requirements"]["risk_cap_summary"]["status"] == "ready"
+    assert report["optional_capabilities"]["risk_cap_counterfactual"]["status"] == "invalid_decision_label"
     assert report["next_action"] == "implement_risk_transient_factor_attribution_v0"
 
 

@@ -3,6 +3,14 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from .risk_cap import (
+    RiskCapPolicy,
+    compute_drawdown,
+    compute_risk_cap_counterfactual_series,
+    compute_rolling_vol,
+    summarize_risk_cap_counterfactual,
+)
+
 import pandas as pd
 
 
@@ -102,6 +110,52 @@ def build_candidate_events(
     return pd.DataFrame(rows, columns=columns)
 
 
+def build_risk_cap_diagnostics(
+    portfolio_returns: pd.DataFrame,
+    *,
+    run_id: str,
+    rolling_window: int = 20,
+    policy: RiskCapPolicy | None = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Build diagnostic-only risk-cap counterfactual rows and one-row summary."""
+
+    required = ["date", "portfolio_return", "benchmark_return"]
+    if portfolio_returns is None or portfolio_returns.empty:
+        return pd.DataFrame(), pd.DataFrame()
+    missing = [col for col in required if col not in portfolio_returns.columns]
+    if missing:
+        raise ValueError(f"portfolio_returns missing required columns: {missing}")
+    if rolling_window < 2:
+        raise ValueError("rolling_window must be at least 2")
+
+    frame = portfolio_returns[required].copy()
+    returns = frame["portfolio_return"].astype(float).tolist()
+    benchmark_returns = frame["benchmark_return"].astype(float).tolist()
+    nav = (1.0 + frame["portfolio_return"].astype(float)).cumprod().tolist()
+    trailing_vol = compute_rolling_vol(returns, window=rolling_window)
+    trailing_drawdown = compute_drawdown(nav)
+    lagged_vol = [None] + trailing_vol[:-1]
+    lagged_drawdown = [None] + trailing_drawdown[:-1]
+    rows = compute_risk_cap_counterfactual_series(
+        pre_cap_returns=returns,
+        lagged_vol=lagged_vol,
+        lagged_drawdown=lagged_drawdown,
+        policy=policy,
+    )
+    row_frame = pd.DataFrame(rows)
+    row_frame.insert(0, "date", frame["date"].astype(str).values)
+    row_frame["decision_label"] = "diagnostic_only"
+    summary = summarize_risk_cap_counterfactual(
+        rows,
+        fold_id=run_id,
+        candidate_id=run_id,
+        decision_label="diagnostic_only",
+        benchmark_returns=benchmark_returns,
+    )
+    summary_frame = pd.DataFrame([summary])
+    return row_frame, summary_frame
+
+
 def export_attribution_inputs(
     *,
     run_id: str,
@@ -111,6 +165,8 @@ def export_attribution_inputs(
     price_data: pd.DataFrame | None = None,
     topk: int | None = None,
     horizon: int = 1,
+    export_risk_cap_diagnostics: bool = False,
+    risk_cap_rolling_window: int = 20,
 ) -> dict[str, Path]:
     """Write disabled-by-default attribution input artifacts for a completed local run."""
 
@@ -126,6 +182,21 @@ def export_attribution_inputs(
     exposure_path = output_dir / f"{run_id}_risk_exposures.csv"
     exposures.to_csv(exposure_path, index=False)
     written["risk_exposures"] = exposure_path
+
+    if export_risk_cap_diagnostics:
+        rows, summary = build_risk_cap_diagnostics(
+            portfolio,
+            run_id=run_id,
+            rolling_window=risk_cap_rolling_window,
+        )
+        if not rows.empty:
+            rows_path = output_dir / f"{run_id}_risk_cap_counterfactual.csv"
+            rows.to_csv(rows_path, index=False)
+            written["risk_cap_counterfactual"] = rows_path
+        if not summary.empty:
+            summary_path = output_dir / f"{run_id}_risk_cap_summary.csv"
+            summary.to_csv(summary_path, index=False)
+            written["risk_cap_summary"] = summary_path
 
     if signal is not None and price_data is not None and topk is not None:
         events = build_candidate_events(signal, price_data, topk=topk, horizon=horizon)

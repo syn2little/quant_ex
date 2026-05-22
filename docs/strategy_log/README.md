@@ -40,6 +40,36 @@
 - 若某条策略已经失效或被更优版本替代，不删除旧记录，只新增一条更新状态的记录。
 - 对 agent run，优先读 `feedback.md` 和 `full_cycle_summary.md`；再决定是否需要把结果提升到 CSV 主表。
 
+## Current Decision Index
+
+本索引用于降低后续 agent / human review 的上下文噪音。它只描述当前决策状态，不替代原始回测、WFV、归因或审计报告。
+
+### Promotable / daily-default eligible
+
+- 当前没有新的 Phase 8 候选可自动进入 daily/default 配置。
+- `config/strategy_candidates.yaml` 中的稳定基线仍是研究参考；任何 daily/default 替换都需要人工审查。
+
+### Compare-next but blocked
+
+- `gate_m008`：完整 WFV 平均 Sharpe 与 positive-fold 数较强，但 2022 fold Sharpe 仍为负且最大回撤约 `-29.15%`；状态是 `compare_next / not_promotable`。
+- 下一步只允许 read-only 或 narrow replay 诊断，优先验证 portfolio risk-layer / risk-cap 是否改善 absolute drawdown survival。
+
+### Diagnostic-only artifacts
+
+- External Knowledge Scout：只提供 hypothesis input，不能作为 promotion evidence。
+- Attribution input export：默认关闭；用于生成 portfolio returns / risk exposures / candidate events 的本地 artifact contract。
+- Risk-cap diagnostics：默认关闭；`--export-risk-cap-diagnostics` 只随 attribution export 生成 counterfactual rows / summary，状态为 `diagnostic_only`。
+- `phase8_gate_m008_2022_risk_cap_counterfactual_2026-05-21.md`：固定 `gate_m008` 信号路径的 2022 post-hoc risk-cap counterfactual；改善 drawdown/tail，但牺牲 upside capture，不能视为 replay 或 WFV 证据。
+
+### Superseded / do-not-repeat
+
+- 继续围绕 `gate_m008` 或 SVS threshold 做细粒度微调：当前视为高过拟合风险路线，不应作为下一轮主线。
+- 仅凭同模型或单折读数推广策略：不满足项目 promotion 证据标准。
+
+### Manual approval required
+
+- 完整 WFV、市场数据刷新、daily/default 配置替换、launchd/定时任务修改、真实通知或任何 rebalance-like side effect。
+
 ## 近期 Agent 结论
 
 ### 2026-05-13 full-cycle validation

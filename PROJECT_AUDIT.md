@@ -1,9 +1,9 @@
-# quant_ex 项目审计报告（2026-05-20 更新版）
+# quant_ex 项目审计报告（2026-05-22 更新版）
 
-> 复核时间：2026-05-20
-> 复核基线：当前工作区 `dashboard-console-base` 分支，HEAD `edf7d4ed fix daily rebalance initial position replay`，包含大量未提交 Phase 8 / knowledge scout / attribution / daily rebalance 改动
+> 复核时间：2026-05-22
+> 复核基线：当前工作区 `cleanup/organize-20260520...origin/cleanup/organize-20260520`，HEAD `e55e9f9c docs: add phase8 research artifacts`，叠加本轮 risk-cap diagnostic exporter / contract / current decision index 未提交改动
 > 复核范围：`models/`、`features/`、`data/`、`backtest/`、`signals/`、`agent/strategy_iteration/`、`knowledge_scout/`、`run_*.py`、`config/`、`test/`、`web/`、`docs/strategy_log/`
-> 复核验证：`run_train.py --list-registry`；Phase 8、knowledge scout、scheduled rebalance、signal postprocess 相关 78 个测试通过
+> 复核验证：`run_train.py --list-registry`；Phase 8、knowledge scout、scheduled rebalance、signal postprocess、risk-cap exporter/contract 相关 139 个测试通过
 
 ---
 
@@ -32,9 +32,10 @@
 - **Transient attribution 已完成首轮诊断**：同模型 attribution 显示 residual 均值略负、drawdown stress 下更弱、missed winners 较多，但这仍是诊断证据，不是信号放宽或 promotion 证据。
 - **gate_m008 是 Phase 8 当前最强研究候选，但不可推广**：完整 WFV 中 `gate_m008` 平均 Sharpe `1.1248`、6/7 正 Sharpe、p-value `0.0079`，但 2022 fold Sharpe `-0.0424`、最大回撤 `-29.15%`，当前 promotion report 为 `compare_next / not_promotable`。
 - **2022 弱折归因把问题从阈值微调转向组合风险层**：daily failure attribution 显示 stress residual 平均仍为正，但 absolute portfolio return 和 drawdown 很差；继续调 SVS/gate threshold 有过拟合风险，下一步应偏向 portfolio risk-cap 诊断。
-- **Risk-cap 当前仍是纯函数/合成测试脚手架**：`agent/strategy_iteration/risk_cap.py` 已提供状态机、pre/post counterfactual、fold summary 字段，但未接入 backtest/WFV/exporter，也未推广任何配置。
-- **Daily rebalance 初始持仓 replay 修复正在工作区内**：`run_scheduled_rebalance.py` 和 `test/test_scheduled_rebalance.py` 有未提交改动，相关测试通过；仍需注意真实推送/launchd/实盘语义操作要先 dry-run 或确认。
-- **工作区很脏**：存在大量未提交和未跟踪文件，本审计只更新本文件，不清理、不回滚、不推广任何候选。
+- **Risk-cap 已进入 diagnostic-only artifact/exporter 阶段**：`agent/strategy_iteration/risk_cap.py` 已提供状态机、pre/post counterfactual、fold summary 字段；`run_backtest.py --export-attribution-inputs --export-risk-cap-diagnostics` 可选导出 counterfactual rows / summary，但仍未接入 WFV 或 daily/default 配置。
+- **2022 risk-cap counterfactual 结论偏谨慎**：固定 `gate_m008` 信号路径时，默认 cap 改善 2022 drawdown/tail，但明显牺牲 upside capture 和 total return；当前只支持 diagnostic/refine，不足以进入 replay promotion。
+- **工作区存在本轮 risk-cap/contract/index 未提交改动**：集中在 attribution exporter、risk-cap counterfactual 脚本与 strategy_log current decision index；本审计不清理、不回滚、不推广任何候选。
+- **Daily rebalance 初始持仓 replay 已提交并有单测覆盖**：`run_scheduled_rebalance.py` 的 replay 修复已进入当前提交链；launchd 仍是 live-side mutating 路径，审计只做单测和文档核对，未执行真实 rebalance/通知/launchd。
 
 整体判断：项目已从“基础设施补齐”进入“研究证据治理 + 组合风险控制 + 实盘口径一致性”阶段。当前最大的收益不来自继续搜索更细阈值，而来自把已发现的弱折风险转成可复验、低前视、低过拟合的风险层实验。
 
@@ -44,17 +45,18 @@
 
 ### 2.1 工作区状态
 
-- 当前分支：`dashboard-console-base...origin/dashboard-console-base`。
-- 当前 HEAD：`edf7d4ed fix daily rebalance initial position replay`。
-- 当前存在大量未提交修改与未跟踪文件，集中在：
-  - `agent/strategy_iteration/*`：attribution、risk cap、transient attribution、daily failure attribution。
-  - `knowledge_scout/*`：外部研究 scout 模块。
-  - `run_backtest.py`、`run_walk_forward_validation.py`、`run_agent_strategy_iteration.py`、`run_scheduled_rebalance.py`。
-  - `config/phase8_*`、`config/csi1000_transient_repair_*`、`config/knowledge_scout.yaml`。
-  - `docs/strategy_log/phase8_*` 与 `docs/strategy_log/knowledge_scout/`。
-  - 多个 Phase 8 测试文件。
+- 当前分支：`cleanup/organize-20260520...origin/cleanup/organize-20260520`。
+- 当前 HEAD：`e55e9f9c docs: add phase8 research artifacts`。
+- 本分支已把 2026-05-20 的大块 dirty work 按主题拆成 7 个提交；原始 7 条命名 stash 与 `.agent_task_artifacts/worktree_cleanup_20260520_180021` 备份仍保留。
+- 当前仍有本轮未提交修改，集中在：
+  - `agent/strategy_iteration/attribution_input_export.py`、`agent/strategy_iteration/attribution_inputs.py`：risk-cap diagnostic exporter 与 contract/status。
+  - `run_backtest.py`：`--export-risk-cap-diagnostics` opt-in CLI 与依赖 `--export-attribution-inputs` 的校验。
+  - `docs/strategy_log/README.md`：Current Decision Index。
+  - `PROJECT_AUDIT.md`：本审计更新。
+  - `test/test_phase8_attribution_input_contract.py`、`test/test_phase8_attribution_input_export.py`、`test/test_run_backtest_attribution_export.py`：exporter/contract 回归测试。
+  - `docs/strategy_log/phase8_gate_m008_2022_risk_cap_counterfactual_2026-05-21.md`、`scripts/analyze_phase8_gate_m008_risk_cap_counterfactual.py`：2022 post-hoc counterfactual 报告与脚本。
 
-审计含义：当前报告反映的是“工作区真实状态”，不是干净提交状态。后续提交前应拆分为若干主题 commit，避免把诊断脚手架、研究报告、运行产物和 daily rebalance 修复混在一起。
+审计含义：当前报告反映的是“整理后分支 + 本轮 risk-cap diagnostic 变更”的真实状态。后续提交前仍应保持主题拆分，避免把诊断脚手架、研究报告、运行产物和 live-side 配置混在一起。
 
 ### 2.2 规模与注册表
 
@@ -180,7 +182,7 @@
 
 **影响：** Agent context 可能被重复结论稀释，后续 planner 更容易“看见很多文档”但抓不住当前有效边界。
 
-**建议：** 给 `docs/strategy_log/README.md` 或 agent context 增加“当前有效结论索引”，区分 latest decision、superseded decision、diagnostic-only artifact。
+**建议：** 持续维护 `docs/strategy_log/README.md` 的 Current Decision Index，并在 agent context 中区分 latest decision、superseded decision、diagnostic-only artifact。
 
 ---
 
@@ -198,19 +200,20 @@
 
 ---
 
-### 5.2 Attribution input export：基础打通，默认关闭是正确边界
+### 5.2 Attribution input export：基础打通，risk-cap 诊断扩展仍默认关闭
 
-**位置：** `agent/strategy_iteration/attribution_input_export.py`、`run_backtest.py --export-attribution-inputs`、`run_walk_forward_validation.py`、`test/test_*attribution*`
+**位置：** `agent/strategy_iteration/attribution_input_export.py`、`run_backtest.py --export-attribution-inputs`、`run_backtest.py --export-risk-cap-diagnostics`、`run_walk_forward_validation.py`、`test/test_*attribution*`
 
 **结论：** 当前 exporter 可生成：
 
 - `portfolio_returns`：`date`、`portfolio_return`、`benchmark_return`、可选 `cost`、`excess_return`。
 - `risk_exposures`：`residual_return`、`drawdown`、`abs_residual_return`。
 - `candidate_events`：accepted/rejected、score、rank、forward_return。
+- `risk_cap_counterfactual` / `risk_cap_summary`：仅在显式开启 risk-cap diagnostics 时生成，且要求 `decision_label=diagnostic_only`。
 
 **风险：** 当前 risk exposure 只是 residual/drawdown 最小合同，不是 Barra/行业/风格风险模型。若报告中称为完整风险模型，会过度解释。
 
-**建议：** 继续保持 disabled-by-default；真实 backtest/WFV 导出应带 run_id、config snapshot、deal_price/cost/benchmark metadata。
+**建议：** 继续保持 disabled-by-default；`--export-risk-cap-diagnostics` 必须依赖 `--export-attribution-inputs`；真实 backtest/WFV 导出应带 run_id、config snapshot、deal_price/cost/benchmark metadata。
 
 ---
 
@@ -269,7 +272,7 @@
 
 ---
 
-### 5.6 Risk-cap：纯函数脚手架健康，但尚未进入策略验证
+### 5.6 Risk-cap：diagnostic exporter 健康，但尚未进入策略验证
 
 **位置：** `agent/strategy_iteration/risk_cap.py`、`test/test_phase8_risk_cap.py`、`docs/strategy_log/phase8_risk_cap_diagnostic_inputs_2026-05-19.md`
 
@@ -281,9 +284,11 @@
 - `compute_risk_cap_counterfactual_series()`。
 - `summarize_risk_cap_counterfactual()`，包含 return/drawdown/vol/IR/turnover/tail/capture 等 report-only 字段。
 
-**边界：** 当前仍是 pure/synthetic diagnostic scaffolding：未接 backtest，未接 WFV，未导出真实 fold artifact，未修改 daily config，未 promotion。
+**边界：** 当前仍是 diagnostic-only：已能通过 opt-in exporter 生成 risk-cap counterfactual rows / summary，且已有 2022 post-hoc 报告；但未接 WFV，未修改 daily config，未 promotion。
 
-**建议：** 下一步若继续，应先做 toy artifact exporter 或使用已有 attribution artifacts 做 narrow same-model replay；不要直接全量 WFV 或 daily 接入。
+**新增 2026-05-21 读数：** 固定 `gate_m008` 2022 信号路径的默认 cap 将最大回撤从 `-0.291492` 改到 `-0.198393`，worst 5-day 从 `-0.246430` 改到 `-0.133345`，但 total return delta 为 `-0.033884`，positive return capture delta 为 `-0.887214`。结论是 `diagnostic_refine`，不是 `compare_next`。
+
+**建议：** 下一步若继续，应先把 risk-cap summary 纳入 contract/status index，并只做 adjacent-fold narrow replay 设计；不要直接全量 WFV 或 daily 接入。
 
 ---
 
@@ -297,13 +302,13 @@
 
 ---
 
-### OPT-B02 高收益中成本：把 risk-cap 从纯函数推进到 toy exporter / narrow replay
+### OPT-B02 高收益中成本：把 risk-cap diagnostic exporter 推进到 narrow replay
 
 当前风险层方向比阈值微调更符合证据。建议顺序：
 
-1. toy artifact exporter：只生成 5-10 日合成 daily state / holdings / trade detail / fold summary。
-2. 使用已有 attribution artifacts 做 `gate_m008` narrow same-model replay。
-3. 只有当 replay 证明确实改善 2022 tail 且不明显牺牲正常年份，再设计 holdout 或 WFV。
+1. 巩固 exporter/contract/status index，确保 risk-cap artifact 始终标记 `diagnostic_only`。
+2. 使用已有 attribution/backtest artifacts 做 `gate_m008` adjacent-fold narrow replay 设计。
+3. 只有当 replay 证明确实改善 tail 且不明显牺牲正常年份，再设计 holdout 或 WFV。
 
 ---
 
@@ -313,9 +318,9 @@
 
 ---
 
-### OPT-B04 中收益中成本：建立 strategy_log 的 current-decision index
+### OPT-B04 中收益中成本：维护 strategy_log 的 current-decision index
 
-新增或强化 `docs/strategy_log/README.md`：
+持续维护 `docs/strategy_log/README.md`：
 
 - 当前可推广策略。
 - 当前 near-promotable 但 blocked 策略。
@@ -362,7 +367,7 @@
 - Knowledge Scout：外部研究 hypothesis input 层。
 - Attribution input export：portfolio returns / residual risk exposures / candidate events 的最小合同导出。
 - Transient attribution / daily failure attribution：Phase 8 诊断工具。
-- Risk-cap pure helper：状态机、counterfactual series、fold summary 合成测试脚手架。
+- Risk-cap diagnostic helper/exporter：状态机、counterfactual series、fold summary、可选 backtest exporter 与 contract/status 测试。
 
 ### 7.2 部分具备
 
@@ -406,7 +411,7 @@ Agent 可以提出计划、写审批模板、吸收 feedback；但 promotion 仍
 
 #### CAP-C05 组合风险层验证
 
-Risk-cap 目前只有纯函数/合成数据；缺真实 backtest artifact replay、holdout、WFV 证据。
+Risk-cap 已具备 opt-in diagnostic exporter 和 2022 post-hoc counterfactual；仍缺 adjacent-fold replay、holdout、WFV 证据，也未接 daily/default 配置。
 
 #### CAP-C06 统一研究可观测性与失败审计
 
@@ -445,10 +450,10 @@ benchmark 链路已接通；剩余主要风险是默认 `deal_price="close"` 偏
 ## 9. 建议的下一轮工作顺序
 
 1. **冻结 Phase 8 阈值微调**：保留 `gate_m008` 为 near-promotable reference，但不要继续围绕 -0.08 做更细阈值搜索。
-2. **补 risk-cap toy exporter**：先生成合成 daily state / holdings / trade detail / fold summary，验证合同与状态机，不接真实策略。
-3. **做 narrow same-model risk-cap replay**：只用已有 attribution/backtest artifacts 评估 `gate_m008` 的 2022 tail 是否改善；输出必须标记 `diagnostic_only`。
+2. **巩固 risk-cap diagnostic exporter**：已具备 opt-in counterfactual rows / summary；继续补 contract/status index 与真实 artifact schema 检查，不接真实策略。
+3. **设计 adjacent-fold narrow replay**：只在已有 attribution/backtest artifacts 上评估 `gate_m008` 相邻年份 tail/return capture；输出必须标记 `diagnostic_only`。
 4. **建立实盘口径 metadata 模板**：所有 backtest/WFV/promotion report 必填 `deal_price`、成本、benchmark、rank_metric、数据版本。
-5. **整理 strategy_log current-decision index**：明确 `gate_m008`、risk-cap、transient attribution、knowledge scout 的当前状态和边界。
+5. **维护 strategy_log current-decision index**：明确 `gate_m008`、risk-cap、transient attribution、knowledge scout 的当前状态和边界。
 6. **补历史快照数据设计**：先从行业/ST/上市状态最小合同开始，不急于大规模重跑。
 7. **再考虑 holdout/WFV**：只有当 risk-cap replay 有清晰改善且不牺牲正常年份，再请求人工批准更广验证。
 
@@ -468,26 +473,32 @@ git log -1 --oneline
   test/test_phase8_attribution_input_contract.py \
   test/test_phase8_attribution_input_export.py \
   test/test_phase8_daily_failure_attribution.py \
+  test/test_phase8_gate_m008_risk_cap_counterfactual_script.py \
   test/test_phase8_risk_cap.py \
   test/test_phase8_transient_attribution.py \
   test/test_run_backtest_attribution_export.py \
   test/test_walk_forward_attribution_export.py \
   test/test_scheduled_rebalance.py \
-  test/test_signal_postprocess.py
+  test/test_signal_postprocess.py \
+  test/test_phase7_agent_attribution.py \
+  test/test_grid_search.py \
+  test/test_walk_forward_validation.py \
+  test/test_backtest_metrics.py \
+  test/test_signal_diagnostics.py
 ```
 
 结果：
 
 - `run_train.py --list-registry` 正常输出 5 个模型与 19 个因子注册项。
-- Pytest 收集 `78` 个测试，结果 `78 passed in 2.58s`。
+- Pytest 收集 `139` 个测试，结果 `139 passed in 6.08s`。
 - 本次未运行 full WFV、未刷新市场数据、未执行 rebalance、未发送通知、未推广任何策略配置。
 
 ---
 
 ## 结论
 
-截至 2026-05-20，`quant_ex` 的核心短板已经不是“没有工具”，而是“如何防止工具链把诊断结果误用为推广证据”。Phase 8 的主线很清楚：`gate_m008` 值得继续研究，但弱折显示问题更偏组合风险层，而不是继续信号阈值微调。
+截至 2026-05-22，`quant_ex` 的核心短板已经不是“没有工具”，而是“如何防止工具链把诊断结果误用为推广证据”。Phase 8 的主线很清楚：`gate_m008` 值得继续研究，但弱折显示问题更偏组合风险层，而不是继续信号阈值微调。
 
-下一轮最稳妥的方向是：用严格 metadata 和 artifact contract 固化研究口径，用 risk-cap 的 toy/replay 诊断验证 absolute risk survival 是否能改善，再决定是否值得人工批准更大范围验证。
+下一轮最稳妥的方向是：用严格 metadata 和 artifact contract 固化研究口径，用 risk-cap 的 diagnostic exporter / adjacent-fold replay 验证 absolute risk survival 是否能改善，再决定是否值得人工批准更大范围验证。
 
-*本报告为当前工作区审计更新版。后续如果 risk-cap 从纯函数进入真实 replay、或历史快照数据补齐，应继续更新本文件。*
+*本报告为当前工作区审计更新版。后续如果 risk-cap 从 diagnostic exporter 进入 adjacent-fold replay / holdout，或历史快照数据补齐，应继续更新本文件。*

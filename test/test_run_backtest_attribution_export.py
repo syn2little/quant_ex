@@ -1,4 +1,5 @@
 import importlib
+import subprocess
 import sys
 from pathlib import Path
 
@@ -104,6 +105,7 @@ def test_run_backtest_exports_attribution_inputs_when_enabled(tmp_path, monkeypa
         hold_thresh_vals=[5],
         grid_workers=1,
         export_attribution_inputs=True,
+        export_risk_cap_diagnostics=True,
         run_id="unit_backtest",
     )
 
@@ -111,6 +113,22 @@ def test_run_backtest_exports_attribution_inputs_when_enabled(tmp_path, monkeypa
     assert (output_dir / "unit_backtest_portfolio_returns.csv").exists()
     assert (output_dir / "unit_backtest_risk_exposures.csv").exists()
     assert (output_dir / "unit_backtest_candidate_events.csv").exists()
+    assert (output_dir / "unit_backtest_risk_cap_counterfactual.csv").exists()
+    assert (output_dir / "unit_backtest_risk_cap_summary.csv").exists()
 
     events = pd.read_csv(output_dir / "unit_backtest_candidate_events.csv")
     assert set(events["decision"]) == {"accepted", "rejected"}
+
+
+def test_risk_cap_diagnostics_cli_requires_attribution_export():
+    script = Path(__file__).resolve().parents[1] / "run_backtest.py"
+
+    result = subprocess.run(
+        [sys.executable, str(script), "--export-risk-cap-diagnostics"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode == 2
+    assert "--export-risk-cap-diagnostics requires --export-attribution-inputs" in result.stderr
