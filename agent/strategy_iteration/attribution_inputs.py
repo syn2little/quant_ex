@@ -81,7 +81,11 @@ def assess_attribution_input_contract(root: str | Path) -> dict[str, Any]:
         _csv_column_values(root / requirements[name]["path"], "decision_label") == {"diagnostic_only"}
         for name in ("risk_cap_counterfactual", "risk_cap_summary")
     )
-    risk_cap_ready = risk_cap_schema_ready and risk_cap_decision_label_valid
+    risk_cap_pairing_valid = risk_cap_schema_ready and _risk_cap_artifacts_pair(
+        root / requirements["risk_cap_counterfactual"]["path"],
+        root / requirements["risk_cap_summary"]["path"],
+    )
+    risk_cap_ready = risk_cap_schema_ready and risk_cap_decision_label_valid and risk_cap_pairing_valid
     if primary_ready:
         overall = "ready_for_transient_diagnostic" if events_ready else "ready_for_transient_only"
         next_action = "implement_risk_transient_factor_attribution_v0"
@@ -96,7 +100,11 @@ def assess_attribution_input_contract(root: str | Path) -> dict[str, Any]:
         "requirements": requirements,
         "optional_capabilities": {
             "risk_cap_counterfactual": {
-                "status": _risk_cap_optional_status(risk_cap_schema_ready, risk_cap_decision_label_valid),
+                "status": _risk_cap_optional_status(
+                    risk_cap_schema_ready,
+                    risk_cap_decision_label_valid,
+                    risk_cap_pairing_valid,
+                ),
                 "decision_label": "diagnostic_only",
                 "promotion_evidence": False,
             }
@@ -201,9 +209,29 @@ def _csv_column_values(path: Path, column: str) -> set[str]:
         return set()
 
 
-def _risk_cap_optional_status(schema_ready: bool, decision_label_valid: bool) -> str:
+def _risk_cap_artifacts_pair(counterfactual_path: Path, summary_path: Path) -> bool:
+    counterfactual_stem = counterfactual_path.name.removesuffix("_risk_cap_counterfactual.csv")
+    summary_stem = summary_path.name.removesuffix("_risk_cap_summary.csv")
+    if counterfactual_stem != summary_stem:
+        return False
+    summary_pairs = _csv_row_pairs(summary_path, "fold_id", "candidate_id")
+    return summary_pairs == {(counterfactual_stem, counterfactual_stem)}
+
+
+def _csv_row_pairs(path: Path, left: str, right: str) -> set[tuple[str, str]]:
+    try:
+        with path.open("r", encoding="utf-8-sig", newline="") as handle:
+            reader = csv.DictReader(handle)
+            return {(str(row.get(left, "")).strip(), str(row.get(right, "")).strip()) for row in reader}
+    except Exception:
+        return set()
+
+
+def _risk_cap_optional_status(schema_ready: bool, decision_label_valid: bool, pairing_valid: bool) -> str:
     if not schema_ready:
         return "missing_optional_artifact"
     if not decision_label_valid:
         return "invalid_decision_label"
+    if not pairing_valid:
+        return "mismatched_artifacts"
     return "ready"

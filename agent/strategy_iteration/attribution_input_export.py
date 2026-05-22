@@ -90,11 +90,12 @@ def build_candidate_events(
     if aligned.empty:
         return pd.DataFrame(columns=columns)
     rows: list[dict[str, Any]] = []
+    instrument_level = aligned.index.names.index("instrument") if isinstance(aligned.index, pd.MultiIndex) else None
     for dt, day_df in aligned.groupby(level="datetime"):
         day = day_df.sort_values("score", ascending=False).copy()
         day["rank"] = range(1, len(day) + 1)
         for idx, row in day.iterrows():
-            instrument = idx[1] if isinstance(idx, tuple) else idx
+            instrument = idx[instrument_level] if instrument_level is not None else idx
             accepted = int(row["rank"]) <= topk
             rows.append(
                 {

@@ -63,6 +63,24 @@ def test_build_candidate_events_from_signal_and_prices():
     assert "forward_return" in events.columns
 
 
+def test_build_candidate_events_preserves_instrument_datetime_index_order():
+    index = pd.MultiIndex.from_product(
+        [["SH600000", "SZ000001"], [pd.Timestamp("2026-01-01")]],
+        names=["instrument", "datetime"],
+    )
+    signal = pd.Series([0.9, 0.1], index=index, name="score")
+    price_index = pd.MultiIndex.from_product(
+        [[pd.Timestamp("2026-01-01"), pd.Timestamp("2026-01-02")], ["SH600000", "SZ000001"]],
+        names=["datetime", "instrument"],
+    )
+    prices = pd.DataFrame({"real_close": [10, 20, 11, 18]}, index=price_index)
+
+    events = build_candidate_events(signal, prices, topk=1, horizon=1)
+
+    assert set(events["instrument"]) == {"SH600000", "SZ000001"}
+    assert events.loc[events["instrument"] == "SH600000", "decision"].item() == "accepted"
+
+
 def test_build_risk_cap_diagnostics_uses_lagged_inputs_only():
     portfolio_returns = pd.DataFrame(
         {

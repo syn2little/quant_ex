@@ -212,8 +212,8 @@ def summarize_risk_cap_counterfactual(
 
     if not rows:
         raise ValueError("rows must not be empty")
-    if decision_label not in {"diagnostic_only", "compare_next", "not_promotable"}:
-        raise ValueError("decision_label must be diagnostic_only, compare_next, or not_promotable")
+    if decision_label != "diagnostic_only":
+        raise ValueError("risk-cap counterfactual summaries must be diagnostic_only")
     if not _is_valid_number(periods_per_year) or float(periods_per_year) <= 0:
         raise ValueError("periods_per_year must be positive")
 

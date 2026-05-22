@@ -1,7 +1,7 @@
 # quant_ex 项目审计报告（2026-05-22 更新版）
 
 > 复核时间：2026-05-22
-> 复核基线：当前分支 `cleanup/organize-20260520...origin/cleanup/organize-20260520`，HEAD `caeccfde feat: export risk cap diagnostics`，较远端 ahead 2 commits（含 `a507d28e docs: add may 22 knowledge scout artifacts` 与 `caeccfde`）
+> 复核基线：当前分支 `cleanup/organize-20260520...origin/cleanup/organize-20260520`，HEAD `046be2c9 fix: tighten risk cap diagnostic contract`，较远端 ahead 3 commits（含 `a507d28e docs: add may 22 knowledge scout artifacts`、`caeccfde feat: export risk cap diagnostics` 与 `046be2c9`）
 > 复核范围：`models/`、`features/`、`data/`、`backtest/`、`signals/`、`agent/strategy_iteration/`、`knowledge_scout/`、`run_*.py`、`config/`、`test/`、`web/`、`docs/strategy_log/`
 > 复核验证：`run_train.py --list-registry`；Phase 8、knowledge scout、scheduled rebalance、signal postprocess、risk-cap exporter/contract 相关 139 个测试通过
 
@@ -34,7 +34,7 @@
 - **2022 弱折归因把问题从阈值微调转向组合风险层**：daily failure attribution 显示 stress residual 平均仍为正，但 absolute portfolio return 和 drawdown 很差；继续调 SVS/gate threshold 有过拟合风险，下一步应偏向 portfolio risk-cap 诊断。
 - **Risk-cap 已进入 diagnostic-only artifact/exporter 阶段**：`agent/strategy_iteration/risk_cap.py` 已提供状态机、pre/post counterfactual、fold summary 字段；`run_backtest.py --export-attribution-inputs --export-risk-cap-diagnostics` 可选导出 counterfactual rows / summary，但仍未接入 WFV 或 daily/default 配置。
 - **2022 risk-cap counterfactual 结论偏谨慎**：固定 `gate_m008` 信号路径时，默认 cap 改善 2022 drawdown/tail，但明显牺牲 upside capture 和 total return；当前只支持 diagnostic/refine，不足以进入 replay promotion。
-- **本轮 risk-cap/contract/index 变更已提交到当前 HEAD**：集中在 attribution exporter、risk-cap counterfactual 脚本与 strategy_log current decision index；当前工作树应保持干净，本审计不清理、不回滚、不推广任何候选。
+- **本轮 risk-cap/contract/index 变更已提交到当前 HEAD**：集中在 attribution exporter、risk-cap counterfactual 脚本、strategy_log current decision index 与 diagnostic-only contract 加固；当前工作树应保持干净，本审计不清理、不回滚、不推广任何候选。
 - **Daily rebalance 初始持仓 replay 已提交并有单测覆盖**：`run_scheduled_rebalance.py` 的 replay 修复已进入当前提交链；launchd 仍是 live-side mutating 路径，审计只做单测和文档核对，未执行真实 rebalance/通知/launchd。
 
 整体判断：项目已从“基础设施补齐”进入“研究证据治理 + 组合风险控制 + 实盘口径一致性”阶段。当前最大的收益不来自继续搜索更细阈值，而来自把已发现的弱折风险转成可复验、低前视、低过拟合的风险层实验。
@@ -46,8 +46,8 @@
 ### 2.1 工作区状态
 
 - 当前分支：`cleanup/organize-20260520...origin/cleanup/organize-20260520`。
-- 当前 HEAD：`caeccfde feat: export risk cap diagnostics`。
-- 相对远端：`0 behind / 2 ahead`，新增提交为 `a507d28e docs: add may 22 knowledge scout artifacts` 与 `caeccfde feat: export risk cap diagnostics`。
+- 当前 HEAD：`046be2c9 fix: tighten risk cap diagnostic contract`。
+- 相对远端：`0 behind / 3 ahead`，新增提交为 `a507d28e docs: add may 22 knowledge scout artifacts`、`caeccfde feat: export risk cap diagnostics` 与 `046be2c9 fix: tighten risk cap diagnostic contract`。
 - 本分支已把 2026-05-20 的大块 dirty work 按主题拆成 7 个提交；原始 7 条命名 stash 与 `.agent_task_artifacts/worktree_cleanup_20260520_180021` 备份仍保留。
 - 本轮已提交的 Phase 8 变更集中在：
   - `agent/strategy_iteration/attribution_input_export.py`、`agent/strategy_iteration/attribution_inputs.py`：risk-cap diagnostic exporter 与 contract/status。
