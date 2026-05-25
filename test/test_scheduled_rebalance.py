@@ -5,6 +5,7 @@ import json
 import pandas as pd
 
 from quant_ex.run_scheduled_rebalance import (
+    _annotate_executed_target,
     _compute_portfolio_pnl,
     _convert_snapshot_to_actual_prices,
     _diff_positions,
@@ -372,6 +373,25 @@ def test_positions_after_actions_keeps_filtered_small_diffs_as_previous():
     assert positions["SH600001"]["entry_date"] == "2026-04-30"
     assert positions["SH600003"]["shares"] == 100.0
     assert "SH600002" in positions
+
+
+def test_annotate_executed_target_preserves_entry_date_on_partial_add():
+    previous = {
+        "SH601669": {
+            "shares": 5000,
+            "price": 5.2,
+            "value": 26000.0,
+            "entry_date": "2026-05-15",
+            "cost_price": 5.4,
+        }
+    }
+    target = {"SH601669": {"shares": 5300, "price": 5.48, "value": 29044.0}}
+
+    annotated = _annotate_executed_target(target, previous, "2026-05-22")
+
+    assert annotated["SH601669"]["shares"] == 5300.0
+    assert annotated["SH601669"]["entry_date"] == "2026-05-15"
+    assert annotated["SH601669"]["cost_price"] == 5.4
 
 
 def test_compute_portfolio_pnl_adds_carry_and_explicit_cost(monkeypatch):

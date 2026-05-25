@@ -646,8 +646,7 @@ def _annotate_executed_target(
     for inst, info in annotated.items():
         prev_info = previous.get(inst, {})
         prev_shares = float(prev_info.get("shares", 0) or 0)
-        new_shares = float(info.get("shares", 0) or 0)
-        if prev_shares >= new_shares and prev_info.get("entry_date"):
+        if prev_shares > 0 and prev_info.get("entry_date"):
             info["entry_date"] = prev_info["entry_date"]
             if prev_info.get("cost_price") is not None:
                 info["cost_price"] = prev_info["cost_price"]
