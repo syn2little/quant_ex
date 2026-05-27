@@ -17,6 +17,7 @@ from quant_ex.run_scheduled_rebalance import (
     _positions_after_actions,
     _previous_trading_day,
     _rebuild_signal_for_reminder,
+    _replay_positions_from_initial,
     _resolve_cfg_start_date,
     RebalanceAction,
 )
@@ -438,6 +439,65 @@ def test_pnl_carry_after_actions_realizes_sold_position_pnl():
     )
 
     assert carry["cum_pnl"] == 500.0
+
+def test_replay_keeps_initial_positions_when_execution_mode_is_manual(monkeypatch):
+    calendar = pd.to_datetime(["2026-04-30", "2026-05-06", "2026-05-07"]).tolist()
+    cfg = {
+        "market": "csi300",
+        "topk": 5,
+        "n_drop": 5,
+        "hold_thresh": 0,
+        "start_date": "2026-04-30",
+        "account": 150000.0,
+        "min_action_value": 1000.0,
+        "execution_mode": "manual",
+    }
+    initial = {
+        "SH600489": {"shares": 900, "price": 12.0, "value": 10800.0, "entry_date": "2026-04-30"},
+        "SH600900": {"shares": 900, "price": 20.0, "value": 18000.0, "entry_date": "2026-04-30"},
+    }
+
+    monkeypatch.setattr("quant_ex.run_scheduled_rebalance._load_model", lambda config, model_path="": object())
+    monkeypatch.setattr("quant_ex.run_scheduled_rebalance.DataLoader", lambda config: object())
+    monkeypatch.setattr("quant_ex.run_scheduled_rebalance.UniverseFilter", lambda strategy: object())
+    monkeypatch.setattr("quant_ex.run_scheduled_rebalance._predict_for_replay", lambda **kwargs: object())
+    monkeypatch.setattr(
+        "quant_ex.run_scheduled_rebalance._load_actual_close",
+        lambda instrument, trade_date: 13.0 if instrument == "SH600489" else 21.0,
+    )
+
+    class FakeEngine:
+        def __init__(self, config):
+            pass
+
+        def run(self, **kwargs):
+            return None, {
+                pd.Timestamp("2026-04-30"): {
+                    "SH601111": {"shares": 4000, "price": 7.0, "value": 28000.0},
+                    "SZ000651": {"shares": 700, "price": 40.0, "value": 28000.0},
+                },
+                pd.Timestamp("2026-05-06"): {
+                    "SH601111": {"shares": 4000, "price": 7.2, "value": 28800.0},
+                    "SZ000651": {"shares": 700, "price": 41.0, "value": 28700.0},
+                },
+            }
+
+    monkeypatch.setattr("quant_ex.run_scheduled_rebalance.BacktestEngine", FakeEngine)
+
+    positions, pnl_carry = _replay_positions_from_initial(
+        config={},
+        cfg=cfg,
+        initial_positions=initial,
+        initial_date="2026-04-30",
+        trade_date="2026-05-07",
+        trading_calendar=calendar,
+    )
+
+    assert sorted(positions) == ["SH600489", "SH600900"]
+    assert positions["SH600489"]["shares"] == 900.0
+    assert positions["SH600900"]["entry_date"] == "2026-04-30"
+    assert pnl_carry is None
+
 
 def test_reminder_rebuild_replays_initial_positions_before_real_rebalance(monkeypatch):
     calendar = pd.to_datetime(["2026-04-30", "2026-05-19", "2026-05-20"]).tolist()

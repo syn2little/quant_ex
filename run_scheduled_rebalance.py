@@ -146,6 +146,7 @@ def _daily_cfg(config: dict, args: argparse.Namespace) -> Dict[str, Any]:
     cfg["replay_from_initial_positions"] = bool(
         args.replay_from_initial_positions or cfg.get("replay_from_initial_positions", False)
     )
+    cfg["execution_mode"] = str(cfg.get("execution_mode", "auto_signal")).strip().lower()
     cfg["cache_dir"] = cfg.get("cache_dir") or "signals/daily_rebalance_cache"
     cfg["reminder_rebuild_on_miss"] = bool(
         cfg.get("reminder_rebuild_on_miss", True) and not args.no_reminder_rebuild
@@ -895,6 +896,8 @@ def _replay_positions_from_initial(
     trade_ts = pd.Timestamp(trade_date).normalize()
     signal_days = [day for day in trading_calendar if start_ts <= day < trade_ts]
     if not signal_days:
+        return _refresh_position_prices(initial_positions, trade_date), None
+    if str(cfg.get("execution_mode", "auto_signal")).strip().lower() == "manual":
         return _refresh_position_prices(initial_positions, trade_date), None
 
     last_signal_date = signal_days[-1].strftime("%Y-%m-%d")
