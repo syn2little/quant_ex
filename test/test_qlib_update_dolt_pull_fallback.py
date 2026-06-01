@@ -97,3 +97,23 @@ def test_cli_accepts_allow_stale_on_pull_failure(monkeypatch):
     )
     args = dolt_qlib.parse_args()
     assert args.allow_stale_on_pull_failure is True
+
+def test_scheduled_rebalance_update_uses_stale_pull_fallback(monkeypatch):
+    import run_scheduled_rebalance
+
+    calls = []
+
+    def fake_run(cmd, cwd=None, check=False):
+        calls.append((cmd, cwd, check))
+        return subprocess.CompletedProcess(args=cmd, returncode=0)
+
+    monkeypatch.setattr(run_scheduled_rebalance.subprocess, "run", fake_run)
+
+    run_scheduled_rebalance._run_update("config/base.yaml", create_tarball=False)
+
+    assert len(calls) == 1
+    cmd, cwd, check = calls[0]
+    assert "--allow-stale-on-pull-failure" in cmd
+    assert "--no-tarball" in cmd
+    assert cwd == run_scheduled_rebalance.PROJECT_ROOT
+    assert check is True

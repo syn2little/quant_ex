@@ -245,6 +245,8 @@ def _run_update(config_path: Optional[str], create_tarball: bool) -> None:
         cmd.extend(["--config", config_path])
     if not create_tarball:
         cmd.append("--no-tarball")
+    # Keep daily rebalance usable when Dolt/CloudFront pulls are transiently flaky.
+    cmd.append("--allow-stale-on-pull-failure")
     logger.info("更新 qlib 数据: %s", " ".join(cmd))
     subprocess.run(cmd, cwd=PROJECT_ROOT, check=True)
 
