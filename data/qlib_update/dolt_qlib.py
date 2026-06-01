@@ -54,6 +54,7 @@ class UpdateOptions:
     clone_depth: int
     skip_exists: bool
     skip_dolt_pull: bool
+    allow_stale_on_pull_failure: bool
     reuse_dolt_server: bool
     install_dolt: bool
     create_tarball: bool
@@ -134,6 +135,8 @@ def build_options(config: Dict[str, Any], args: argparse.Namespace) -> UpdateOpt
         clone_depth=args.clone_depth or int(update_config.get("clone_depth", 1)),
         skip_exists=args.skip_exists,
         skip_dolt_pull=args.skip_dolt_pull,
+        allow_stale_on_pull_failure=args.allow_stale_on_pull_failure
+        or bool(update_config.get("allow_stale_on_pull_failure", False)),
         reuse_dolt_server=args.reuse_dolt_server,
         install_dolt=args.install_dolt,
         create_tarball=not args.no_tarball,
@@ -152,6 +155,34 @@ def run(
 ) -> None:
     print("+", " ".join(command))
     subprocess.run(command, cwd=str(cwd) if cwd else None, env=env, check=True)
+
+
+def _redact_signed_url_noise(text: str) -> str:
+    """Keep Dolt pull diagnostics readable without leaking signed URL tokens."""
+    if not text:
+        return ""
+    lines = []
+    for line in text.splitlines():
+        if "?X-Amz-" in line:
+            line = line.split("?X-Amz-", 1)[0] + "?[REDACTED]"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def run_capture(
+    command: list[str],
+    cwd: Optional[Path] = None,
+    env: Optional[dict[str, str]] = None,
+) -> subprocess.CompletedProcess[str]:
+    print("+", " ".join(command))
+    return subprocess.run(
+        command,
+        cwd=str(cwd) if cwd else None,
+        env=env,
+        text=True,
+        capture_output=True,
+        check=False,
+    )
 
 
 def command_ok(command: list[str], cwd: Path) -> bool:
@@ -392,11 +423,33 @@ def start_dolt_server(paths: UpdatePaths, options: UpdateOptions) -> Tuple[Optio
 
     if not options.skip_dolt_pull:
         head_before = _dolt_head_commit(paths.dolt_repo_dir)
-        run(["dolt", "pull", "origin"], cwd=paths.dolt_repo_dir)
+        pull_result = run_capture(["dolt", "pull", "origin"], cwd=paths.dolt_repo_dir)
+        if pull_result.returncode != 0:
+            message = _redact_signed_url_noise(
+                "\n".join(part for part in [pull_result.stdout, pull_result.stderr] if part)
+            )
+            if not options.allow_stale_on_pull_failure:
+                raise subprocess.CalledProcessError(
+                    pull_result.returncode,
+                    pull_result.args,
+                    output=pull_result.stdout,
+                    stderr=pull_result.stderr,
+                )
+            print(
+                "WARNING: `dolt pull origin` failed; continuing with existing local "
+                "Dolt data because --allow-stale-on-pull-failure is set."
+            )
+            if message:
+                print(message)
+        else:
+            if pull_result.stdout:
+                print(pull_result.stdout, end="")
+            if pull_result.stderr:
+                print(pull_result.stderr, end="")
         head_after = _dolt_head_commit(paths.dolt_repo_dir)
         dolt_had_updates = head_before != head_after
         if dolt_had_updates:
-            print(f"Dolt pull: new commits detected ({head_before[:8] if head_before else 'none'} → {head_after[:8] if head_after else 'none'})")
+            print(f"Dolt pull: new commits detected ({head_before[:8] if head_before else 'none'} -> {head_after[:8] if head_after else 'none'})")
         else:
             print("Dolt pull: already up-to-date, no new commits.")
 
@@ -708,6 +761,14 @@ def parse_args() -> argparse.Namespace:
         "--skip-dolt-pull",
         action="store_true",
         help="Do not run `dolt pull origin` before exporting.",
+    )
+    parser.add_argument(
+        "--allow-stale-on-pull-failure",
+        action="store_true",
+        help=(
+            "If `dolt pull origin` fails, continue from the existing local Dolt "
+            "checkout instead of aborting the qlib refresh."
+        ),
     )
     parser.add_argument(
         "--reuse-dolt-server",
