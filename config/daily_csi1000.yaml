@@ -27,3 +27,17 @@ model:
       - name: "sector"
         momentum_windows: [5, 10, 20, 60]
         reversal_windows: [5, 20]
+
+daily_rebalance:
+  market: "csi300"
+  topk: 15
+  n_drop: 3
+  # Emergency baseline mode: disable hold protection so the baseline can make
+  # an immediate full rebalance from the supplied real-account positions.
+  hold_thresh: 0
+  account: 150000
+  notify_channel: "bark"
+  start_date: "2024-01-01"
+  model_path: "models/lgbm_csi1000_balanced_20260429_002424.pkl"
+  min_action_value: 1000
+  cache_roll_forward_positions: false

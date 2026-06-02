@@ -86,7 +86,7 @@ done
 
 echo ""
 echo "Schedules:"
-echo "  com.quant_ex.daily_rebalance                20:00 run command/daily/csi1000_balanced_overlay_0428.sh"
+echo "  com.quant_ex.daily_rebalance                20:00 run command/daily/csi1000_balanced_overlay_0428.sh (baseline/no hold protection)"
 echo "  com.quant_ex.daily_rebalance.open_reminder  09:00 run cached open reminder"
 echo "  com.quant_ex.daily_rebalance.close_reminder 14:00 run cached close reminder"
 echo "Check status: launchctl print gui/$(id -u)/<label>"
